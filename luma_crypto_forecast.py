@@ -1,5 +1,5 @@
 """
-LUMA · Crypto Forecast Platform
+LOMA · Crypto Forecast Platform
 Password: 953
 Run: streamlit run luma_crypto_forecast.py
 """
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import time, base64, os
 
 # ─────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="LUMA", page_icon="🌙", layout="wide",
+st.set_page_config(page_title="LOMA", page_icon="🌙", layout="wide",
                    initial_sidebar_state="collapsed")
 
 PASSWORD         = "953"
@@ -58,7 +58,7 @@ def logo_tag(h=56, dark=False):
     if LOGO_URI:
         return f'<img src="{LOGO_URI}" style="height:{h}px;width:auto;display:inline-block;vertical-align:middle" />'
     return (f'<span style="font-family:Georgia,serif;font-size:{int(h*0.7)}px;'
-            f'font-weight:300;color:{color};vertical-align:middle;letter-spacing:.04em">🌙 LUMA</span>')
+            f'font-weight:300;color:{color};vertical-align:middle;letter-spacing:.04em">🌙 LOMA</span>')
 
 # ─────────────────────────────────────────────────────────────────────
 #  TOP 100 COINS  +  symbol normalizer
@@ -206,51 +206,33 @@ def load_model():
     try:
         import torch
         torch.set_float32_matmul_precision("high")
+        import timesfm
 
-        # Try primary import path first
-        try:
-            import timesfm
-            if hasattr(timesfm, 'TimesFM_2p5_200M_torch'):
-                m = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
-                    "google/timesfm-2.5-200m-pytorch", torch_compile=False)
-            else:
-                # Fallback: direct submodule import for older package layout
-                from timesfm.timesfm_2p5.timesfm_2p5_torch import TimesFM_2p5_200M_torch
-                m = TimesFM_2p5_200M_torch.from_pretrained(
-                    "google/timesfm-2.5-200m-pytorch", torch_compile=False)
-
-            m.compile(timesfm.ForecastConfig(
-                max_context=1024, max_horizon=512,
-                normalize_inputs=True,
-                use_continuous_quantile_head=True,
-                force_flip_invariance=True,
-                infer_is_positive=True,
-                fix_quantile_crossing=True,
-            ))
-            return m, None
-        except ImportError:
-            # Last resort: TimesFm 1.x / 2.x old API
-            import timesfm
-            m = timesfm.TimesFm(
-                hparams=timesfm.TimesFmHparams(
-                    backend="cpu",
-                    per_core_batch_size=32,
-                    horizon_len=128,
-                ),
-                checkpoint=timesfm.TimesFmCheckpoint(
-                    huggingface_repo_id="google/timesfm-1.0-200m-pytorch"),
-            )
-            return m, None
+        # timesfm 1.x API (what's actually installed: timesfm==1.3.0)
+        # The 1.x package uses TimesFm class with hparams/checkpoint pattern
+        m = timesfm.TimesFm(
+            hparams=timesfm.TimesFmHparams(
+                backend="torch",
+                per_core_batch_size=32,
+                horizon_len=128,
+                context_len=512,
+                num_layers=20,
+                model_dims=1280,
+            ),
+            checkpoint=timesfm.TimesFmCheckpoint(
+                huggingface_repo_id="google/timesfm-1.0-200m-pytorch"),
+        )
+        return m, None
     except Exception as e:
         return None, str(e)
 
 # ─────────────────────────────────────────────────────────────────────
 #  AI  (OpenRouter primary, HuggingFace fallback)
 # ─────────────────────────────────────────────────────────────────────
-LUMA_PERSONA = """You are LUMA, an elite AI crypto market analyst built specifically for short-term OHLC prediction.
+LUMA_PERSONA = """You are LOMA, an elite AI crypto market analyst built specifically for short-term OHLC prediction.
 You speak like a seasoned prop trader — sharp, direct, confident, precise.
 Give specific price levels, support/resistance zones, momentum reads, and risk notes.
-Never mention any AI company, model name, or framework. You ARE LUMA — a proprietary system.
+Never mention any AI company, model name, or framework. You ARE LOMA — a proprietary system.
 Keep responses under 220 words unless asked for more.
 Always reference the specific data provided."""
 
@@ -260,7 +242,7 @@ def _openrouter_call(messages):
         headers={"Authorization":f"Bearer {OPENROUTER_KEY}",
                  "Content-Type":"application/json",
                  "HTTP-Referer":"https://luma.streamlit.app",
-                 "X-Title":"LUMA"},
+                 "X-Title":"LOMA"},
         json={"model":OPENROUTER_MODEL,
               "messages":[{"role":"system","content":LUMA_PERSONA}]+messages,
               "max_tokens":450,"temperature":0.65}, timeout=50)
@@ -284,7 +266,7 @@ def luma_call(messages):
         try:
             return _hf_call(messages)
         except Exception as e:
-            return f"⚠️ LUMA is temporarily unavailable: {e}"
+            return f"⚠️ LOMA is temporarily unavailable: {e}"
 
 def market_ctx(sym, summaries, raw_dfs):
     lines = [f"LIVE MARKET DATA — {sym}\n"]
@@ -300,7 +282,7 @@ def market_ctx(sym, summaries, raw_dfs):
 def do_analysis(sym, summaries, raw_dfs):
     ctx = market_ctx(sym, summaries, raw_dfs)
     return luma_call([{"role":"user","content":
-        f"{ctx}\n\nDeliver your LUMA analysis: trend direction, key levels, "
+        f"{ctx}\n\nDeliver your LOMA analysis: trend direction, key levels, "
         f"multi-TF confluence, highest-conviction call, and key risk. Specific price levels."}])
 
 def do_chat(sym, summaries, raw_dfs, question, history):
@@ -368,8 +350,8 @@ PREMIUM_FEATURES = {
         "badge": "PREMIUM",
     },
     "luma_optimizer": {
-        "title": "🚀 Let LUMA Increase Your Strategy Profitability by 30%",
-        "desc": "Upload your strategy rules and LUMA's AI engine will analyze your historical performance, identify the highest-alpha entry windows, optimize your position sizing, and suggest precision refinements to squeeze out 30%+ more net profit. Based on multi-factor regime analysis and quantile-calibrated signal enhancement.",
+        "title": "🚀 Let LOMA Increase Your Strategy Profitability by 30%",
+        "desc": "Upload your strategy rules and LOMA's AI engine will analyze your historical performance, identify the highest-alpha entry windows, optimize your position sizing, and suggest precision refinements to squeeze out 30%+ more net profit. Based on multi-factor regime analysis and quantile-calibrated signal enhancement.",
         "badge": "PREMIUM",
     },
 }
@@ -388,14 +370,15 @@ def premium_modal():
 <style>
 .pm-overlay{{
   position:fixed;inset:0;z-index:9999;
-  background:rgba(0,0,0,.85);backdrop-filter:blur(6px);
+  background:rgba(0,0,0,.75);backdrop-filter:blur(6px);
   display:flex;align-items:center;justify-content:center;
+  cursor:pointer;
 }}
 .pm-box{{
   background:#0d1225;border:1px solid #a78bfa;border-radius:14px;
   padding:36px 40px;max-width:520px;width:90%;
   box-shadow:0 0 80px rgba(167,139,250,.25);
-  position:relative;
+  position:relative;cursor:default;
 }}
 .pm-badge{{
   background:linear-gradient(135deg,#7c3aed,#2563eb);
@@ -403,15 +386,21 @@ def premium_modal():
   padding:4px 10px;border-radius:3px;display:inline-block;margin-bottom:14px;
 }}
 .pm-title{{color:#f1f5f9;font-size:1.15rem;font-weight:700;margin-bottom:10px;line-height:1.4}}
-.pm-desc{{color:#64748b;font-size:.84rem;line-height:1.72;margin-bottom:22px}}
-.pm-label{{color:#94a3b8;font-size:.75rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px}}
+.pm-desc{{color:#94a3b8;font-size:.84rem;line-height:1.72;margin-bottom:22px}}
+.pm-label{{color:#64748b;font-size:.75rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}}
+.pm-close-hint{{color:#374151;font-size:.7rem;text-align:center;margin-top:14px}}
 </style>
-<div class="pm-overlay" id="pm-overlay">
+<div class="pm-overlay" onclick="
+  var box=document.querySelector('.pm-box');
+  if(box && !box.contains(event.target)){{
+    // clicking outside - we use Streamlit button below instead
+  }}
+" id="pm-overlay">
   <div class="pm-box">
-    <span class="pm-badge">🔒 {feat["badge"]}</span>
+    <span class="pm-badge">🔒 {feat["badge"]} — PREMIUM MEMBERS ONLY</span>
     <div class="pm-title">{feat["title"]}</div>
     <div class="pm-desc">{feat["desc"]}</div>
-    <div class="pm-label">Premium Access Key</div>
+    <div class="pm-label">Enter Premium Access Key</div>
     {err_html}
 </div></div>
 """, unsafe_allow_html=True)
@@ -437,6 +426,7 @@ def premium_modal():
             st.session_state.premium_modal = None
             st.session_state.premium_err   = False
             st.rerun()
+    st.markdown('<p style="color:#1e293b;font-size:.72rem;text-align:center;margin-top:6px">Click ✕ Close or press Escape to dismiss</p>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
 #  GLOBAL CSS
@@ -556,38 +546,40 @@ def page_landing():
   letter-spacing:.08em;text-transform:uppercase;transition:color .2s}}
 .navlinks a:hover{{color:#e2e8f0}}
 .hbody{{position:relative;z-index:10;flex:1;display:flex;flex-direction:column;
-  justify-content:flex-end;padding:0 40px 80px 40px}}
+  justify-content:flex-end;padding:0 40px 32px 40px}}
 .eyebrow{{color:#a78bfa;font-size:.72rem;font-weight:700;letter-spacing:.22em;
   text-transform:uppercase;margin-bottom:14px}}
 .htitle{{font-family:'Cormorant Garamond',serif!important;
   font-size:clamp(3rem,7vw,7rem);font-weight:300;line-height:1.02;
   color:#f1f5f9;margin:0 0 8px 0}}
 .htitle em{{font-style:italic;color:#a78bfa}}
-.hcredit{{color:#334155;font-size:.76rem;letter-spacing:.08em;margin-bottom:16px}}
-.hsub{{color:#64748b;font-size:.94rem;max-width:480px;line-height:1.65;margin-bottom:44px}}
+.hcredit{{color:#475569;font-size:.76rem;letter-spacing:.08em;margin-bottom:10px}}
+.hsub{{color:#94a3b8;font-size:.94rem;max-width:480px;line-height:1.65;margin-bottom:20px}}
 .strip{{position:relative;z-index:10;background:rgba(255,255,255,.03);
   border-top:1px solid rgba(255,255,255,.06);padding:11px 40px;
   display:flex;gap:32px;align-items:center;flex-wrap:wrap}}
 .si{{display:flex;align-items:center;gap:7px}}
-.si .sym{{color:#334155;font-size:.68rem;font-weight:700;letter-spacing:.09em}}
+.si .sym{{color:#64748b;font-size:.68rem;font-weight:700;letter-spacing:.09em}}
 .si .up{{color:#34d399;font-size:.68rem}} .si .dn{{color:#f87171;font-size:.68rem}}
 .stButton>button{{
   display:flex!important;align-items:center;justify-content:center;gap:10px;
-  border:1px solid rgba(255,255,255,.15)!important;
-  background:rgba(10,13,28,.7)!important;
-  backdrop-filter:blur(12px);color:#e2e8f0!important;
-  padding:16px 40px!important;border-radius:4px!important;
-  font-size:.86rem!important;font-weight:700!important;
-  letter-spacing:.12em;text-transform:uppercase;
+  border:2px solid rgba(167,139,250,.5)!important;
+  background:linear-gradient(135deg,rgba(109,40,217,.55),rgba(37,99,235,.45))!important;
+  backdrop-filter:blur(12px);color:#ffffff!important;
+  padding:18px 40px!important;border-radius:6px!important;
+  font-size:1rem!important;font-weight:800!important;
+  letter-spacing:.15em;text-transform:uppercase;
   width:calc(100% - 80px)!important;
-  margin:0 40px 20px 40px!important;
+  margin:0 40px 16px 40px!important;
   position:static!important;transition:all .25s;
-  box-shadow:0 0 0 0 rgba(167,139,250,0)
+  box-shadow:0 4px 28px rgba(109,40,217,.4)!important;
+  text-shadow:0 1px 4px rgba(0,0,0,.4)!important;
 }}
 .stButton>button:hover{{
-  background:rgba(80,40,180,.4)!important;
-  border-color:#a78bfa!important;color:#c4b5fd!important;
-  box-shadow:0 0 28px rgba(167,139,250,.2)!important
+  background:linear-gradient(135deg,rgba(124,58,237,.8),rgba(29,78,216,.7))!important;
+  border-color:#c4b5fd!important;color:#fff!important;
+  box-shadow:0 8px 40px rgba(167,139,250,.5)!important;
+  transform:translateY(-2px)!important;
 }}
 </style>
 <div class="hero">
@@ -622,7 +614,7 @@ def page_landing():
     <div style="display:flex;align-items:center;gap:14px">
       {logo_tag(112)}
       <span style="width:1px;height:28px;background:rgba(255,255,255,.1);display:inline-block"></span>
-      <span style="color:#2d3748;font-size:.66rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase">Platform</span>
+      <span style="color:#4a5568;font-size:.66rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase">Platform</span>
     </div>
     <div class="navlinks">
       <a href="#">Markets</a><a href="#">Forecasts</a><a href="#">About</a>
@@ -631,7 +623,7 @@ def page_landing():
 
   <div class="hbody">
     <div class="eyebrow">Forming a View</div>
-    <h1 class="htitle">LUMA <em>MarketView</em></h1>
+    <h1 class="htitle">LOMA <em>MarketView</em></h1>
     <p class="hcredit">Created by Nancy_Pelosi</p>
     <p class="hsub">AI-powered temporal forecasts for global crypto markets.<br>
     Real-time data · Predictive charting · Intelligent analysis.</p>
@@ -647,7 +639,7 @@ def page_landing():
 </div>
 """, unsafe_allow_html=True)
 
-    if st.button("⊞  Launch LUMA  —  Enter Platform"):
+    if st.button("⊞  Launch LOMA  —  Enter Platform"):
         st.session_state.page = "login"
         st.rerun()
 
@@ -746,41 +738,51 @@ def dash_shell():
 <style>
 .stApp{background:#080c1a!important}
 .block-container{padding:0 0 28px 0!important;max-width:100%!important}
-</style>
-""", unsafe_allow_html=True)
 
-    # Premium nav buttons style
-    st.markdown("""
-<style>
+/* all nav buttons uniform */
+div[data-testid="stHorizontalBlock"]:first-of-type{
+  background:#0a0d1c;border-bottom:1px solid #111827;margin:0!important;
+  align-items:stretch!important;
+}
+div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button{
+  height:50px!important;padding:0 4px!important;
+  background:#0a0d1c!important;color:#64748b!important;
+  border:none!important;border-radius:0!important;
+  font-size:.7rem!important;font-weight:600!important;
+  letter-spacing:.04em!important;width:100%!important;
+  white-space:nowrap!important;overflow:hidden!important;
+  text-overflow:ellipsis!important;
+}
+div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover{
+  color:#e2e8f0!important;background:#0d1225!important;
+}
+
+/* premium buttons get a tinted style */
 .prem-btn-wrap .stButton>button{
-  background:linear-gradient(135deg,rgba(109,40,217,.18),rgba(37,99,235,.18))!important;
+  background:linear-gradient(135deg,rgba(109,40,217,.15),rgba(37,99,235,.12))!important;
   color:#a78bfa!important;
-  border:1px solid rgba(167,139,250,.3)!important;
-  border-radius:4px!important;
-  font-size:.74rem!important;
-  font-weight:700!important;
-  letter-spacing:.04em!important;
-  padding:10px 6px!important;
-  width:100%!important;
-  transition:all .2s!important;
+  border-left:2px solid rgba(167,139,250,.25)!important;
+  font-size:.65rem!important;
+  line-height:1.25!important;
+  padding:0 3px!important;
 }
 .prem-btn-wrap .stButton>button:hover{
-  background:linear-gradient(135deg,rgba(109,40,217,.35),rgba(37,99,235,.35))!important;
-  border-color:#a78bfa!important;color:#c4b5fd!important;
+  background:linear-gradient(135deg,rgba(109,40,217,.3),rgba(37,99,235,.25))!important;
+  color:#c4b5fd!important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-    # Nav: logo | Home | Forecast | Upload | [3 premium buttons] | About | SignOut
-    nav = st.columns([1.8, 0.85, 0.85, 0.7, 1.1, 1.1, 1.0, 0.75, 0.7])
+    # Tighter 9-col layout: logo | Home | Forecast | Upload | NQ | Crypto | Optimizer | About | SignOut
+    nav = st.columns([1.4, 0.75, 0.8, 0.7, 0.95, 0.95, 1.0, 0.65, 0.65])
 
     with nav[0]:
         st.markdown(f"""
 <div style="background:#0a0d1c;border-bottom:1px solid #111827;
-  padding:12px 18px;display:flex;align-items:center;gap:12px;height:50px">
-  {logo_tag(80)}
-  <span style="width:1px;height:20px;background:#1e293b;display:inline-block"></span>
-  <span style="color:#1e293b;font-size:.64rem;font-weight:700;letter-spacing:.1em">PLATFORM</span>
+  padding:8px 14px;display:flex;align-items:center;gap:10px;height:50px">
+  {logo_tag(72)}
+  <span style="width:1px;height:18px;background:#1e293b;display:inline-block;flex-shrink:0"></span>
+  <span style="color:#1e3a5f;font-size:.58rem;font-weight:700;letter-spacing:.08em;white-space:nowrap">PLATFORM</span>
 </div>""", unsafe_allow_html=True)
 
     std_pages = [("home","🏠 Home"),("forecast","📊 Forecast"),("upload","📤 Upload")]
@@ -790,11 +792,11 @@ def dash_shell():
                 st.session_state.sub = pg
                 st.rerun()
 
-    # Premium buttons
+    # Premium buttons — single short labels that fit
     prem_items = [
-        ("nq_backtest",    "📈 NQ/ES Backtest\n17+ Years"),
-        ("crypto_backtest","🪙 Crypto Backtest\n8+ Years"),
-        ("luma_optimizer", "🚀 LUMA Strategy\nOptimizer +30%"),
+        ("nq_backtest",    "📈 NQ/ES\nBacktest 17yr"),
+        ("crypto_backtest","🪙 Crypto\nBacktest 8yr"),
+        ("luma_optimizer", "🚀 LOMA\nOptimizer +30%"),
     ]
     for i,(key,lbl) in enumerate(prem_items):
         with nav[4+i]:
@@ -814,15 +816,6 @@ def dash_shell():
         if st.button("Sign Out", key="signout", use_container_width=True):
             st.session_state.page = "landing"
             st.rerun()
-
-    st.markdown("""
-<style>
-div[data-testid="stHorizontalBlock"]:first-of-type{
-  background:#0a0d1c;border-bottom:1px solid #111827;margin:0!important}
-div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button{
-  height:50px!important;padding:0 6px!important;
-}
-</style>""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -881,7 +874,7 @@ div.card-btn .stButton>button:hover{background:rgba(167,139,250,.08)!important;c
 
     st.markdown(f"""
 <div class="home-wrap">
-<h1 class="home-title">Welcome to <em>LUMA</em></h1>
+<h1 class="home-title">Welcome to <em>LOMA</em></h1>
 <p class="home-credit">Created by Nancy_Pelosi</p>
 <p class="home-sub">Choose a tool below to begin your analysis.</p>
 <div class="qs-bar">{cells}</div>
@@ -899,13 +892,13 @@ div.card-btn .stButton>button:hover{background:rgba(167,139,250,.08)!important;c
     st.markdown('<div class="card-grid">', unsafe_allow_html=True)
     cards = [
         ("forecast","📊","Live Forecast",
-         "Select any coin and timeframes. LUMA generates a real-time candlestick chart with AI prediction lines overlaid.",
+         "Select any coin and timeframes. LOMA generates a real-time candlestick chart with AI prediction lines overlaid.",
          "live","LIVE"),
         ("upload","📤","Upload Chart Analysis",
-         "Upload your own chart screenshots. LUMA analyzes patterns, signals, and gives you a read.",
+         "Upload your own chart screenshots. LOMA analyzes patterns, signals, and gives you a read.",
          "ai","AI ANALYSIS"),
-        ("chat","💬","Ask LUMA",
-         "Direct conversation with LUMA. Ask anything about crypto, technicals, market structure, or your positions.",
+        ("chat","💬","Ask LOMA",
+         "Direct conversation with LOMA. Ask anything about crypto, technicals, market structure, or your positions.",
          "ai","AI ANALYST"),
         ("forecast","🔍","Run Analysis",
          "Run forecasts across 1m through 1D simultaneously. See where all timeframes align for high-confidence setups.",
@@ -1002,7 +995,7 @@ div.run-luma-wrap .stButton>button:hover{
 
     # ── BIG CENTERED RUN BUTTON ─────────────────────────────────────
     st.markdown('<div class="run-luma-wrap">', unsafe_allow_html=True)
-    run_btn = st.button("🌙  START LUMA ANALYSIS", use_container_width=False, key="run_luma_fc")
+    run_btn = st.button("🌙  START LOMA ANALYSIS", use_container_width=False, key="run_loma_fc")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ── live ticker bar ─────────────────────────────────────────────
@@ -1049,7 +1042,7 @@ div.run-luma-wrap .stButton>button:hover{
 <div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;
   padding:16px 20px;margin:8px 0">
   <div style="color:#a78bfa;font-size:.76rem;font-weight:700;letter-spacing:.1em;
-    text-transform:uppercase;margin-bottom:10px">🌙 LUMA Analysis Starting…</div>
+    text-transform:uppercase;margin-bottom:10px">🌙 LOMA Analysis Starting…</div>
   <div style="background:#111827;border-radius:4px;height:6px;overflow:hidden">
     <div style="background:linear-gradient(90deg,#6d28d9,#38bdf8);
       height:100%;width:100%;border-radius:4px;animation:pulse 1.5s ease-in-out infinite">
@@ -1070,7 +1063,7 @@ div.run-luma-wrap .stButton>button:hover{
         prog_container.markdown("""
 <div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;padding:16px 20px;margin:8px 0">
   <div style="color:#a78bfa;font-size:.76rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">
-    🌙 Initializing LUMA forecast engine…
+    🌙 Initializing LOMA forecast engine…
   </div>
   <div style="color:#334155;font-size:.8rem">Loading model — may take 30–60s on first run.</div>
 </div>""", unsafe_allow_html=True)
@@ -1128,26 +1121,33 @@ div.run-luma-wrap .stButton>button:hover{
             # Forecast (if model loaded)
             if model_available:
                 try:
-                    pt, _ = luma_model.forecast(horizon=horizon, inputs=[prices[-1024:]])
-                    fc    = pt[0]
-                    td    = pd.Timedelta(minutes=mins)
-                    fi    = pd.date_range(start=dates[-1]+td, periods=len(fc), freq=td, tz=dates.tzinfo)
+                    # timesfm 1.x API: forecast(inputs, freq) — no 'horizon' keyword
+                    inp  = [prices[-512:].tolist()]
+                    freq = [0]   # 0 = high-frequency (sub-daily)
+                    point_forecast, _ = luma_model.forecast(inp, freq=freq)
+                    fc = np.array(point_forecast[0])
+                    if len(fc) > horizon:
+                        fc = fc[:horizon]
+                    td = pd.Timedelta(minutes=mins)
+                    fi = pd.date_range(start=dates[-1]+td, periods=len(fc),
+                                       freq=td, tz=dates.tzinfo)
                     fcast_dfs[tf] = pd.DataFrame({"Datetime":fi,"Forecast":fc.round(6)})
                     summaries[tf] = {"last":float(prices[-1]),"end":float(fc[-1]),"bars":len(fc)}
 
-                    r2,g2,b2 = int(col_c[1:3],16),int(col_c[3:5],16),int(col_c[5:7],16)
-                    # Confidence band
+                    # Ghost confidence band (very subtle)
                     fig.add_trace(go.Scatter(
                         x=list(fi)+list(fi[::-1]),
-                        y=list(fc*1.012)+list(fc[::-1]*0.988),
-                        fill="toself",fillcolor=f"rgba({r2},{g2},{b2},.07)",
-                        line=dict(color="rgba(0,0,0,0)"),showlegend=False,hoverinfo="skip"))
-                    # Forecast line (solid gray/muted style)
+                        y=list(fc*1.008)+list(fc[::-1]*0.992),
+                        fill="toself",
+                        fillcolor="rgba(148,163,184,.05)",
+                        line=dict(color="rgba(0,0,0,0)"),
+                        showlegend=False, hoverinfo="skip"))
+                    # Prediction line — muted gray, clearly "projected"
                     fig.add_trace(go.Scatter(
                         x=fi, y=fc, mode="lines",
-                        name=f"LUMA Forecast ({tf})",
-                        line=dict(color=col_c, width=2.5, dash="dash"),
-                        hovertemplate="<b>%{x|%b %d %H:%M}</b><br>$%{y:,.4f}<extra></extra>"))
+                        name=f"LOMA Forecast ({tf})",
+                        line=dict(color="rgba(148,163,184,.55)", width=2, dash="dot"),
+                        hovertemplate="<b>%{x|%b %d %H:%M}</b><br>LOMA: $%{y:,.4f}<extra></extra>"))
                 except Exception as e:
                     st.warning(f"⚠️ Forecast failed on {tf}: {e}")
             else:
@@ -1160,7 +1160,7 @@ div.run-luma-wrap .stButton>button:hover{
     <span style="font-size:1.2rem">✅</span>
     <div>
       <div style="color:#34d399;font-size:.76rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase">
-        LUMA Analysis Complete
+        LOMA Analysis Complete
       </div>
       <div style="background:#111827;border-radius:4px;height:6px;overflow:hidden;margin-top:6px;width:200px">
         <div style="background:#34d399;height:100%;width:100%;border-radius:4px"></div>
@@ -1190,7 +1190,7 @@ div.run-luma-wrap .stButton>button:hover{
         fig.update_layout(
             paper_bgcolor="#0a0d1c", plot_bgcolor="#0a0d1c",
             font=dict(color="#94a3b8",family="IBM Plex Mono"),
-            title=dict(text=f"🌙 LUMA · <b>{symbol}</b>  —  Multi-TF Analysis",
+            title=dict(text=f"🌙 LOMA · <b>{symbol}</b>  —  Multi-TF Analysis",
                        font=dict(color="#f1f5f9",size=14),x=0.01),
             xaxis=dict(gridcolor="#0e1325",linecolor="#111827",
                        rangeslider=dict(visible=True,bgcolor="#07090f",thickness=.04)),
@@ -1216,7 +1216,7 @@ div.run-luma-wrap .stButton>button:hover{
             for tf2, s in summaries.items():
                 p2  = (s["end"]-s["last"])/max(s["last"],0.0001)*100
                 cc2 = "#34d399" if p2>=0 else "#f87171"
-                cells += (f'<div class="icell"><div class="l">LUMA {tf2}</div>'
+                cells += (f'<div class="icell"><div class="l">LOMA {tf2}</div>'
                           f'<div class="v" style="color:{cc2}">{"▲" if p2>=0 else "▼"} {abs(p2):.2f}%</div></div>'
                           f'<div class="icell"><div class="l">Target</div>'
                           f'<div class="v">${s["end"]:,.4f}</div></div>')
@@ -1242,14 +1242,14 @@ div.run-luma-wrap .stButton>button:hover{
                         mime="text/csv",use_container_width=True)
 
         # AI analysis
-        st.markdown('<div class="sh">🌙 LUMA Analysis</div>', unsafe_allow_html=True)
-        with st.spinner("LUMA is reading the charts…"):
+        st.markdown('<div class="sh">🌙 LOMA Analysis</div>', unsafe_allow_html=True)
+        with st.spinner("LOMA is reading the charts…"):
             analysis = do_analysis(symbol, summaries, raw_dfs)
             st.session_state.initial_analysis = analysis
 
         st.markdown(f"""
 <div class="chat-wrap">
-  <div class="lbl-l">🌙 LUMA</div>
+  <div class="lbl-l">🌙 LOMA</div>
   <div class="msg-luma">{analysis.replace(chr(10),"<br>")}</div>
 </div>""", unsafe_allow_html=True)
 
@@ -1265,29 +1265,29 @@ div.run-luma-wrap .stButton>button:hover{
         for tf2, s in summaries.items():
             p2  = (s["end"]-s["last"])/max(s["last"],0.0001)*100
             cc2 = "#34d399" if p2>=0 else "#f87171"
-            cells += (f'<div class="icell"><div class="l">LUMA {tf2}</div>'
+            cells += (f'<div class="icell"><div class="l">LOMA {tf2}</div>'
                       f'<div class="v" style="color:{cc2}">{"▲" if p2>=0 else "▼"} {abs(p2):.2f}%</div></div>'
                       f'<div class="icell"><div class="l">Target</div>'
                       f'<div class="v">${s["end"]:,.4f}</div></div>')
         st.markdown(f"""
 <div class="gbadge">{sym[:3]} &nbsp; {'+' if bpct>=0 else ''}{bpct:.1f}% &nbsp;({best} forecast)</div>
 <div class="igrid">{cells}</div>
-<p style="color:#1e293b;font-size:.76rem;margin-top:4px">↑ Last analysis — click Start LUMA Analysis to refresh.</p>
+<p style="color:#1e293b;font-size:.76rem;margin-top:4px">↑ Last analysis — click Start LOMA Analysis to refresh.</p>
 """, unsafe_allow_html=True)
 
         if st.session_state.initial_analysis:
-            chat_html = (f'<div class="lbl-l">🌙 LUMA</div>'
+            chat_html = (f'<div class="lbl-l">🌙 LOMA</div>'
                          f'<div class="msg-luma">{st.session_state.initial_analysis.replace(chr(10),"<br>")}</div>')
             for h in st.session_state.chat_history:
                 chat_html += (f'<div class="lbl-u">YOU</div><div class="msg-user">{h["user"]}</div>'
-                              f'<div class="lbl-l">🌙 LUMA</div>'
+                              f'<div class="lbl-l">🌙 LOMA</div>'
                               f'<div class="msg-luma">{h["luma"].replace(chr(10),"<br>")}</div>')
             st.markdown(f'<div class="chat-wrap">{chat_html}</div>', unsafe_allow_html=True)
             _render_chat_input(sym, summaries, st.session_state.raw_dfs)
 
 
 def _render_chat_input(sym, summaries, raw_dfs):
-    st.markdown('<div class="sh">💬 Ask LUMA</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sh">💬 Ask LOMA</div>', unsafe_allow_html=True)
     qc, bc = st.columns([5,1])
     with qc:
         user_q = st.text_input("Ask…",
@@ -1296,7 +1296,7 @@ def _render_chat_input(sym, summaries, raw_dfs):
     with bc:
         if st.button("Ask →", key=f"ask_fc_{len(st.session_state.chat_history)}", use_container_width=True):
             if user_q.strip():
-                with st.spinner("LUMA…"):
+                with st.spinner("LOMA…"):
                     reply = do_chat(sym, summaries, raw_dfs, user_q, st.session_state.chat_history)
                     st.session_state.chat_history.append({"user":user_q,"luma":reply})
                     st.rerun()
@@ -1347,25 +1347,25 @@ def sub_upload():
                     f"Context for {uf.name}",
                     placeholder="e.g. BTC 4H chart, looking for breakout above resistance…",
                     key=f"note_{i}")
-                if st.button(f"🌙 Analyze with LUMA", key=f"analyze_{i}", use_container_width=True):
-                    with st.spinner(f"LUMA analyzing {uf.name}…"):
+                if st.button(f"🌙 Analyze with LOMA", key=f"analyze_{i}", use_container_width=True):
+                    with st.spinner(f"LOMA analyzing {uf.name}…"):
                         result = analyze_image(uf.name, note)
                     st.markdown(f"""
 <div style="background:#0d1f0d;border:1px solid #1a3a1a;border-radius:6px;
   padding:14px 18px;color:#a7f3d0;font-size:.83rem;line-height:1.75;margin-top:8px">
   <div style="color:#34d399;font-size:.63rem;font-weight:700;letter-spacing:.08em;margin-bottom:8px">
-    🌙 LUMA — {uf.name.upper()}
+    🌙 LOMA — {uf.name.upper()}
   </div>
   {result.replace(chr(10),"<br>")}
 </div>""", unsafe_allow_html=True)
-                    st.markdown('<div class="sh" style="margin-top:12px">💬 Ask LUMA about this chart</div>',
+                    st.markdown('<div class="sh" style="margin-top:12px">💬 Ask LOMA about this chart</div>',
                                 unsafe_allow_html=True)
                     fu_key = f"followup_{i}"
                     fu = st.text_input("Follow-up", placeholder="Ask anything about this chart…",
                                        label_visibility="collapsed", key=fu_key)
                     if st.button("Ask →", key=f"fu_ask_{i}", use_container_width=True):
                         if fu.strip():
-                            with st.spinner("LUMA…"):
+                            with st.spinner("LOMA…"):
                                 fu_reply = luma_call([{"role":"user",
                                     "content":f"I uploaded chart '{uf.name}'. Prior analysis context:\n{result}\n\nFollow-up question: {fu}"}])
                             st.markdown(f"""
@@ -1381,21 +1381,21 @@ def sub_upload():
 # ══════════════════════════════════════════════════════════════════════
 def sub_chat():
     st.markdown('<div style="padding:14px">', unsafe_allow_html=True)
-    st.markdown('<div class="sh">💬 Ask LUMA — Direct Analyst Chat</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sh">💬 Ask LOMA — Direct Analyst Chat</div>', unsafe_allow_html=True)
 
     if st.session_state.summaries:
         sym = st.session_state.symbol
         tfs = list(st.session_state.summaries.keys())
-        st.success(f"📊 LUMA has live forecast data for **{sym}** across {', '.join(tfs)} — referenced automatically.")
+        st.success(f"📊 LOMA has live forecast data for **{sym}** across {', '.join(tfs)} — referenced automatically.")
     else:
-        st.info("💡 Run a forecast first for LUMA to reference live data. Or ask general crypto questions.")
+        st.info("💡 Run a forecast first for LOMA to reference live data. Or ask general crypto questions.")
 
     st.markdown('<div class="chat-wrap">', unsafe_allow_html=True)
     if not st.session_state.chat_history:
         st.markdown("""
 <div style="text-align:center;padding:36px 0;color:#1e293b">
   <div style="font-size:2.5rem">🌙</div>
-  <div style="font-size:.86rem;margin-top:10px;color:#334155">Ask LUMA anything</div>
+  <div style="font-size:.86rem;margin-top:10px;color:#334155">Ask LOMA anything</div>
   <div style="margin-top:14px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px">
     <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;
       font-size:.74rem;padding:5px 11px;border-radius:4px">Where is BTC support?</span>
@@ -1411,7 +1411,7 @@ def sub_chat():
         for h in st.session_state.chat_history:
             st.markdown(
                 f'<div class="lbl-u">YOU</div><div class="msg-user">{h["user"]}</div>'
-                f'<div class="lbl-l">🌙 LUMA</div>'
+                f'<div class="lbl-l">🌙 LOMA</div>'
                 f'<div class="msg-luma">{h["luma"].replace(chr(10),"<br>")}</div>',
                 unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1419,12 +1419,12 @@ def sub_chat():
     qc, bc, cc = st.columns([5,1,1])
     with qc:
         user_q = st.text_input("Message",
-            placeholder="Ask LUMA anything…",
+            placeholder="Ask LOMA anything…",
             label_visibility="collapsed", key=f"direct_chat_{len(st.session_state.chat_history)}")
     with bc:
         if st.button("Send →", key=f"send_chat_{len(st.session_state.chat_history)}", use_container_width=True):
             if user_q.strip():
-                with st.spinner("LUMA…"):
+                with st.spinner("LOMA…"):
                     reply = do_chat(
                         st.session_state.get("symbol","BTC"),
                         st.session_state.summaries,
@@ -1501,11 +1501,11 @@ def sub_about():
 
 <!-- ABOUT -->
 <div class="about-section">
-  <div class="about-title">🌙 About LUMA MarketView</div>
+  <div class="about-title">🌙 About LOMA MarketView</div>
   <div class="about-body">
-    <b>LUMA MarketView</b> is a proprietary AI forecasting platform engineered specifically for 
+    <b>LOMA MarketView</b> is a proprietary AI forecasting platform engineered specifically for 
     short-timeframe OHLC crypto price prediction. Unlike general-purpose language models 
-    repurposed for financial analysis, LUMA's core prediction architecture was built from the 
+    repurposed for financial analysis, LOMA's core prediction architecture was built from the 
     ground up using temporal pattern recognition models trained exclusively on high-frequency 
     candlestick data across <b>47 cryptocurrency pairs</b> and <b>6 timeframes</b> spanning 2017 to 2025.
     <br><br>
@@ -1513,9 +1513,9 @@ def sub_about():
     independent research into digital asset microstructure and time-series forecasting. 
     Foundational methodology papers have been peer-reviewed and deposited at the 
     <b>Cornell University arXiv preprint repository</b> (arXiv:2024.18847 [q-fin.CP]), 
-    establishing LUMA's theoretical framework in the quantitative finance literature.
+    establishing LOMA's theoretical framework in the quantitative finance literature.
     <br><br>
-    LUMA's inference pipeline combines <b>multi-scale temporal decomposition</b> with 
+    LOMA's inference pipeline combines <b>multi-scale temporal decomposition</b> with 
     <b>probabilistic horizon modeling</b>, enabling it to simultaneously process candlestick 
     context across timeframes as short as 1 minute and as long as 1 day — a capability 
     that general LLMs fundamentally lack. The system ingests live OHLC feeds, normalizes 
@@ -1542,7 +1542,7 @@ def sub_about():
 
   <div class="bench-wrap">
     <div class="bench-row">
-      <div class="bench-name">🌙 LUMA (proprietary)</div>
+      <div class="bench-name">🌙 LOMA (proprietary)</div>
       <div class="bench-bar-wrap">
         <div class="bench-bar" style="width:94.2%;background:linear-gradient(90deg,#6d28d9,#34d399)"></div>
       </div>
@@ -1594,7 +1594,7 @@ def sub_about():
   <div class="about-body" style="margin-top:20px;padding-top:16px;border-top:1px solid #1e293b;font-size:.8rem">
     <b style="color:#a78bfa">Methodology note:</b> All models were evaluated on the same blinded test set. 
     General LLMs (GPT-4o, Grok-2, Gemini) were prompted with raw OHLC context via structured system prompts 
-    optimized for financial forecasting. LUMA's advantage is attributable to its 
+    optimized for financial forecasting. LOMA's advantage is attributable to its 
     <b>purpose-built temporal architecture</b> — trained end-to-end on financial time-series — versus 
     general-purpose transformers not optimized for sequential price prediction. 
     <br><br>
@@ -1611,8 +1611,8 @@ def sub_about():
     <b>Coverage:</b> 90+ USDT pairs including all top-100 coins by market cap<br>
     <b>Timeframes:</b> 1m · 5m · 15m · 30m · 1h · 4h · 1d (full range)<br>
     <b>Lookback:</b> Up to 4,000 bars per fetch, up to 5yr on daily timeframe<br>
-    <b>Forecast Engine:</b> LUMA temporal model — multi-scale decomposition, quantile-calibrated<br>
-    <b>AI Analyst:</b> LUMA conversational AI with live market context injection<br>
+    <b>Forecast Engine:</b> LOMA temporal model — multi-scale decomposition, quantile-calibrated<br>
+    <b>AI Analyst:</b> LOMA conversational AI with live market context injection<br>
     <b>Infrastructure:</b> Streamlit Cloud · Python 3.14 · PyTorch backend<br>
     <b>Access Key:</b> <span style="font-family:'IBM Plex Mono',monospace;color:#a78bfa;
       background:#1a103a;padding:2px 8px;border-radius:3px">953</span><br>
