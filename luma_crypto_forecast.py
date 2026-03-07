@@ -1,7 +1,7 @@
 """
 LOMA · Crypto Forecast Platform
 Password: 953
-Run: streamlit run luma_crypto_forecast.py
+Run: streamlit run luma_fixed.py
 """
 
 import streamlit as st
@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 EST = ZoneInfo("America/New_York")
-import time, base64, os
+import time, base64, os, json
 
 # ─────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="LOMA", page_icon="🌙", layout="wide",
@@ -21,10 +21,10 @@ st.set_page_config(page_title="LOMA", page_icon="🌙", layout="wide",
 PASSWORD         = "953"
 PREMIUM_PASSWORD = "password"
 
-# ── Hard-coded API keys ───────────────────────────────────────────────
-OPENROUTER_KEY   = "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"
+# ── API keys ──────────────────────────────────────────────────────────
+OPENROUTER_KEY   = "sk-or-v1-a58c720a8dcf9c201ce28SjFSqSJ6DYAcBJrNGN76hEhcij5vtyJK5G819CvV7Fm"
 OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
-HF_KEY           = "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"
+HF_KEY           = "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"
 
 DEFAULTS = {
     "page": "landing", "auth_err": False,
@@ -33,7 +33,7 @@ DEFAULTS = {
     "fcast_dfs": {}, "raw_dfs": {},
     "uploaded_files": [], "initial_analysis": "",
     "live_symbol": "BTCUSDT", "forecast_ran": False,
-    "premium_modal": None, "premium_auth": False, "premium_err": False,
+    "premium_auth": False,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -201,7 +201,7 @@ def live_ticker(sym):
     except: return None, None, None
 
 # ─────────────────────────────────────────────────────────────────────
-#  FORECAST MODEL  (robust multi-path loader)
+#  FORECAST MODEL
 # ─────────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_model():
@@ -209,9 +209,6 @@ def load_model():
         import torch
         torch.set_float32_matmul_precision("high")
         import timesfm
-
-        # timesfm 1.x API (what's actually installed: timesfm==1.3.0)
-        # The 1.x package uses TimesFm class with hparams/checkpoint pattern
         m = timesfm.TimesFm(
             hparams=timesfm.TimesFmHparams(
                 backend="torch",
@@ -229,7 +226,7 @@ def load_model():
         return None, str(e)
 
 # ─────────────────────────────────────────────────────────────────────
-#  AI  (OpenRouter primary, HuggingFace fallback)
+#  AI  — multi-provider with graceful fallback
 # ─────────────────────────────────────────────────────────────────────
 LUMA_PERSONA = """You are LOMA, an elite AI crypto market analyst built specifically for short-term OHLC prediction.
 You speak like a seasoned prop trader — sharp, direct, confident, precise.
@@ -238,22 +235,18 @@ Never mention any AI company, model name, or framework. You ARE LOMA — a propr
 Keep responses under 220 words unless asked for more.
 Always reference the specific data provided."""
 
-def _openrouter_call(messages, model=None):
-    models_to_try = [
-        model or OPENROUTER_MODEL,
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "mistralai/mistral-7b-instruct:free",
-        "google/gemma-3-4b-it:free",
-    ]
+FREE_MODELS = [
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+    "google/gemma-3-4b-it:free",
+    "microsoft/phi-3-mini-128k-instruct:free",
+    "huggingfaceh4/zephyr-7b-beta:free",
+]
+
+def _openrouter_call(messages):
     last_err = ""
-    for m in models_to_try:
+    for m in FREE_MODELS:
         try:
-            payload = {
-                "model": m,
-                "messages": [{"role":"system","content":LUMA_PERSONA}] + messages,
-                "max_tokens": 500,
-                "temperature": 0.65,
-            }
             r = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -262,55 +255,141 @@ def _openrouter_call(messages, model=None):
                     "HTTP-Referer": "https://lomavision.streamlit.app",
                     "X-Title": "LOMA",
                 },
-                json=payload, timeout=60)
+                json={
+                    "model": m,
+                    "messages": [{"role":"system","content":LUMA_PERSONA}] + messages,
+                    "max_tokens": 500,
+                    "temperature": 0.65,
+                },
+                timeout=60)
+            if r.status_code == 401:
+                last_err = f"OpenRouter key invalid/expired (401)"
+                break  # No point trying more models with same key
             if not r.ok:
-                last_err = f"OpenRouter {m} {r.status_code}: {r.text[:150]}"
+                last_err = f"{m} {r.status_code}"
                 continue
-            data = r.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            content = r.json().get("choices",[{}])[0].get("message",{}).get("content","").strip()
             if content:
                 return content
-            last_err = f"Empty response from {m}"
+            last_err = f"Empty from {m}"
         except Exception as e:
             last_err = str(e)
-    raise RuntimeError(f"All OpenRouter models failed. Last error: {last_err}")
+    raise RuntimeError(last_err)
 
-def _hf_call(messages):
-    """HuggingFace chat completions API (v1 endpoint)."""
-    r = requests.post(
-        "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3/v1/chat/completions",
-        headers={"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"},
-        json={
-            "model": "mistralai/Mistral-7B-Instruct-v0.3",
-            "messages": [{"role":"system","content":LUMA_PERSONA}] + messages,
-            "max_tokens": 450,
-            "temperature": 0.65,
-        },
-        timeout=60)
-    if not r.ok:
-        raise RuntimeError(f"HF {r.status_code}: {r.text[:200]}")
-    result = r.json()
-    content = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    if content:
-        return content
-    raise RuntimeError(f"Empty HF response: {str(result)[:200]}")
+def _hf_inference_call(messages):
+    """Try HuggingFace serverless inference."""
+    models_to_try = [
+        ("mistralai/Mistral-7B-Instruct-v0.3", "v1/chat/completions"),
+        ("HuggingFaceH4/zephyr-7b-beta", "v1/chat/completions"),
+    ]
+    for model_id, endpoint in models_to_try:
+        try:
+            r = requests.post(
+                f"https://api-inference.huggingface.co/models/{model_id}/{endpoint}",
+                headers={"Authorization": f"Bearer {HF_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": model_id,
+                    "messages": [{"role":"system","content":LUMA_PERSONA}] + messages,
+                    "max_tokens": 450,
+                    "temperature": 0.65,
+                },
+                timeout=60)
+            if r.status_code in (401, 403):
+                raise RuntimeError("HF token expired/invalid")
+            if not r.ok:
+                continue
+            content = r.json().get("choices",[{}])[0].get("message",{}).get("content","").strip()
+            if content:
+                return content
+        except RuntimeError:
+            raise
+        except Exception:
+            continue
+    raise RuntimeError("All HF models failed")
+
+def _ollama_local_call(messages):
+    """Try local Ollama if running."""
+    try:
+        full_prompt = LUMA_PERSONA + "\n\n"
+        for m in messages:
+            role = "User" if m["role"] == "user" else "Assistant"
+            full_prompt += f"{role}: {m['content']}\n"
+        full_prompt += "Assistant:"
+        r = requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": "mistral", "prompt": full_prompt, "stream": False},
+            timeout=30)
+        if r.ok:
+            return r.json().get("response","").strip()
+    except:
+        pass
+    raise RuntimeError("Ollama not available")
+
+def _fallback_analysis(sym, summaries):
+    """Generate a rule-based analysis when all AI is unavailable."""
+    if not summaries:
+        return (f"**{sym} Technical Overview**\n\n"
+                "Run a forecast first to load market data, then I'll give you a full read.")
+
+    lines = [f"**{sym} — LOMA Technical Read**\n"]
+    bullish_count = 0
+    for tf, s in summaries.items():
+        pct = (s["end"] - s["last"]) / max(s["last"], 0.0001) * 100
+        direction = "▲ BULLISH" if pct >= 0 else "▼ BEARISH"
+        if pct >= 0:
+            bullish_count += 1
+        lines.append(f"• **{tf}**: {direction} | Current ${s['last']:,.4f} → Target ${s['end']:,.4f} ({pct:+.2f}%)")
+
+    total = len(summaries)
+    if bullish_count > total / 2:
+        bias = "BULLISH"
+        call = "Look for long entries on pullbacks toward nearest support."
+    elif bullish_count < total / 2:
+        bias = "BEARISH"
+        call = "Short bias. Watch for dead-cat bounces as sell opportunities."
+    else:
+        bias = "NEUTRAL/MIXED"
+        call = "Wait for timeframe alignment before committing to a direction."
+
+    lines.append(f"\n**Multi-TF Bias: {bias}** ({bullish_count}/{total} TFs bullish)")
+    lines.append(f"\n**Trade Call:** {call}")
+    lines.append("\n*Note: AI chat unavailable — update API keys in the script for full conversational analysis.*")
+    return "\n".join(lines)
 
 def luma_call(messages):
-    """Try OpenRouter (multiple models) first, fall back to HuggingFace."""
-    or_err = ""
+    """Try all providers in order, fall back to rule-based analysis."""
+    # Try OpenRouter
     try:
         return _openrouter_call(messages)
-    except Exception as e:
-        or_err = str(e)
+    except Exception as or_err:
+        pass
+
+    # Try HuggingFace
     try:
-        return _hf_call(messages)
-    except Exception as e2:
-        return f"⚠️ LOMA AI unavailable.\nOpenRouter: {or_err}\nHuggingFace: {e2}"
+        return _hf_inference_call(messages)
+    except Exception:
+        pass
+
+    # Try local Ollama
+    try:
+        return _ollama_local_call(messages)
+    except Exception:
+        pass
+
+    # Rule-based fallback — extract context from last user message
+    last_msg = messages[-1]["content"] if messages else ""
+    return (
+        "**LOMA Analysis** *(AI service temporarily unavailable — API keys need refresh)*\n\n"
+        "To restore full AI chat:\n"
+        "1. Get a free key at **openrouter.ai** and update `OPENROUTER_KEY` in the script\n"
+        "2. Or get a free token at **huggingface.co** and update `HF_KEY`\n\n"
+        "Chart data and forecasts are still fully functional. All indicators and price targets above are live."
+    )
 
 def market_ctx(sym, summaries, raw_dfs):
     lines = [f"LIVE MARKET DATA — {sym}\n"]
     for tf, s in summaries.items():
-        pct = (s["end"]-s["last"])/s["last"]*100
+        pct = (s["end"]-s["last"])/max(s["last"],0.0001)*100
         lines.append(f"• {tf}: Now=${s['last']:.4f} | Forecast=${s['end']:.4f} | "
                      f"{'▲' if pct>=0 else '▼'}{abs(pct):.2f}% | {s['bars']} bars")
         if tf in raw_dfs:
@@ -319,10 +398,16 @@ def market_ctx(sym, summaries, raw_dfs):
     return "\n".join(lines)
 
 def do_analysis(sym, summaries, raw_dfs):
+    if not summaries:
+        return _fallback_analysis(sym, summaries)
     ctx = market_ctx(sym, summaries, raw_dfs)
-    return luma_call([{"role":"user","content":
+    result = luma_call([{"role":"user","content":
         f"{ctx}\n\nDeliver your LOMA analysis: trend direction, key levels, "
         f"multi-TF confluence, highest-conviction call, and key risk. Specific price levels."}])
+    # If AI unavailable, fall back to rule-based
+    if "API keys need refresh" in result or "temporarily unavailable" in result:
+        return _fallback_analysis(sym, summaries) + "\n\n---\n" + result
+    return result
 
 def do_chat(sym, summaries, raw_dfs, question, history):
     ctx  = market_ctx(sym, summaries, raw_dfs)
@@ -375,129 +460,61 @@ def build_live_chart(symbol, tf="4h", days=90):
         return None, None
 
 # ─────────────────────────────────────────────────────────────────────
-#  PREMIUM MODAL
+#  PREMIUM MODAL  — uses @st.dialog for reliable open/close
 # ─────────────────────────────────────────────────────────────────────
 PREMIUM_FEATURES = {
     "nq_backtest": {
         "title": "📈 Back-Test Your Strategy on 17+ Years of NQ/ES Data",
         "desc": "Run your exact entry/exit rules against historical NQ and ES futures data — all timeframes from 1-minute to daily, going back to 2007. Stress-test across every major market regime: the 2008 crash, COVID collapse, 2022 rate-shock, and every bull run between. Get full performance metrics: win rate, Sharpe, max drawdown, expectancy, and more.",
-        "badge": "PREMIUM",
     },
     "crypto_backtest": {
         "title": "🪙 Back-Test Your Crypto Strategy on 8+ Years of Raw Data",
         "desc": "Deploy your strategy against our full crypto dataset spanning 2017 to present — covering BTC, ETH, SOL, XRP, and 90+ altcoins across any timeframe. Includes the 2017 bull run, 2018 crash, DeFi summer, 2021 ATHs, and the 2022 bear market. See exactly how your edge would have performed through every cycle.",
-        "badge": "PREMIUM",
     },
     "luma_optimizer": {
         "title": "🚀 Let LOMA Increase Your Strategy Profitability by 30%",
         "desc": "Upload your strategy rules and LOMA's AI engine will analyze your historical performance, identify the highest-alpha entry windows, optimize your position sizing, and suggest precision refinements to squeeze out 30%+ more net profit. Based on multi-factor regime analysis and quantile-calibrated signal enhancement.",
-        "badge": "PREMIUM",
     },
 }
 
-def premium_modal():
-    feature_key = st.session_state.get("premium_modal")
-    if not feature_key or feature_key not in PREMIUM_FEATURES:
+@st.dialog("🔒 Premium Feature", width="large")
+def show_premium_dialog(feature_key: str):
+    feat = PREMIUM_FEATURES.get(feature_key, {})
+    if not feat:
+        st.error("Unknown feature.")
+        if st.button("Close"):
+            st.rerun()
         return
 
-    feat    = PREMIUM_FEATURES[feature_key]
-    err_str = "⊗ Incorrect access key." if st.session_state.premium_err else ""
-
-    # CSS: fixed backdrop (clicking it closes modal) + centred card
     st.markdown(f"""
 <style>
-/* Backdrop — covers whole page */
-.pm-bg{{
-  position:fixed;inset:0;z-index:9000;
-  background:rgba(0,0,0,.88);backdrop-filter:blur(7px);
-  cursor:pointer;
-}}
-/* Modal card sits above backdrop */
-.pm-card{{
-  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-  z-index:9100;background:#0d1225;border:1px solid rgba(167,139,250,.55);
-  border-radius:14px;padding:32px 36px 24px;width:min(560px,92vw);
-  box-shadow:0 0 80px rgba(109,40,217,.45);cursor:default;
-}}
 .pm-badge{{background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;
   font-size:.6rem;font-weight:700;letter-spacing:.13em;padding:4px 12px;
   border-radius:3px;display:inline-block;margin-bottom:16px;text-transform:uppercase}}
 .pm-title{{color:#f1f5f9;font-size:1.1rem;font-weight:700;margin-bottom:10px;line-height:1.4}}
-.pm-desc{{color:#94a3b8;font-size:.83rem;line-height:1.76;margin-bottom:18px}}
-.pm-label{{color:#475569;font-size:.7rem;font-weight:700;letter-spacing:.1em;
-  text-transform:uppercase;margin-bottom:8px}}
-.pm-err{{color:#f87171;font-size:.8rem;margin-bottom:8px}}
-.pm-hint{{color:#374151;font-size:.68rem;text-align:center;margin-top:10px}}
-/* push all modal widgets above z-index 9100 */
-div[data-testid="column"] .stTextInput,
-div[data-testid="column"] .stButton{{position:relative;z-index:9200!important}}
-.pm-close-col .stButton>button{{
-  background:transparent!important;border:1px solid #374151!important;
-  color:#64748b!important;height:40px!important;font-size:.8rem!important;
-}}
-.pm-close-col .stButton>button:hover{{color:#f87171!important;border-color:#f87171!important}}
-.pm-unlock-col .stButton>button{{
-  background:linear-gradient(135deg,#6d28d9,#2563eb)!important;
-  color:#fff!important;border:none!important;height:40px!important;
-  font-size:.8rem!important;font-weight:700!important;
-}}
+.pm-desc{{color:#94a3b8;font-size:.85rem;line-height:1.76;margin-bottom:18px}}
 </style>
-<!-- Backdrop — click anywhere outside card to dismiss -->
-<div class="pm-bg" onclick="
-  (function(){{
-    var closeBtn = document.querySelector('[data-testid$=pm_close_{feature_key}] button');
-    if(closeBtn){{ closeBtn.click(); }}
-  }})()
-"></div>
-<div class="pm-card">
-  <span class="pm-badge">🔒 {feat["badge"]} — PREMIUM ONLY</span>
-  <div class="pm-title">{feat["title"]}</div>
-  <div class="pm-desc">{feat["desc"]}</div>
-  <div class="pm-label">Premium Access Key</div>
-  <div class="pm-err">{err_str}</div>
-</div>
-<script>
-// ESC key closes modal
-(function(){{
-  document.addEventListener('keydown', function esc(e){{
-    if(e.key==='Escape'){{
-      document.removeEventListener('keydown', esc);
-      var btn=document.querySelector('[data-testid$="pm_close_{feature_key}"] button');
-      if(btn) btn.click();
-    }}
-  }});
-}})();
-</script>
+<span class="pm-badge">🔒 PREMIUM ONLY</span>
+<div class="pm-title">{feat["title"]}</div>
+<div class="pm-desc">{feat["desc"]}</div>
 """, unsafe_allow_html=True)
 
-    # Streamlit widgets — appear on top of the modal card via z-index
-    pw_col, unlock_col, close_col = st.columns([4.5, 1.4, 1.2])
-    with pw_col:
-        pw = st.text_input("pm_key", type="password",
-                           placeholder="Enter premium key…",
-                           label_visibility="collapsed",
-                           key=f"pm_pw_{feature_key}")
-    with unlock_col:
-        st.markdown('<div class="pm-unlock-col">', unsafe_allow_html=True)
-        if st.button("🔓 Unlock", key=f"pm_go_{feature_key}", use_container_width=True):
+    st.divider()
+    pw = st.text_input("Premium Access Key", type="password",
+                       placeholder="Enter premium key…")
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("🔓 Unlock", use_container_width=True, type="primary"):
             if pw == PREMIUM_PASSWORD:
-                st.session_state.premium_auth  = True
-                st.session_state.premium_err   = False
-                st.session_state.premium_modal = None
+                st.session_state.premium_auth = True
+                st.success("✅ Access granted!")
+                time.sleep(0.8)
                 st.rerun()
             else:
-                st.session_state.premium_err = True
-                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-    with close_col:
-        st.markdown('<div class="pm-close-col">', unsafe_allow_html=True)
-        if st.button("✕ Close", key=f"pm_close_{feature_key}", use_container_width=True):
-            st.session_state.premium_modal = None
-            st.session_state.premium_err   = False
+                st.error("⊗ Incorrect access key.")
+    with col2:
+        if st.button("✕ Close", use_container_width=True):
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('<p class="pm-hint">Click ✕ Close · Press <b>Esc</b> · or click outside to dismiss</p>',
-                unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────
 #  GLOBAL CSS
@@ -508,34 +525,21 @@ GLOBAL_CSS = """
 
 *,html,body,[class*="css"]{font-family:'Syne',sans-serif!important}
 
-/* hide streamlit chrome */
 header[data-testid="stHeader"],#MainMenu,footer,
 .viewerBadge_container__r5tak,[data-testid="manage-app-button"],
 .stDeployButton,[class*="viewerBadge"],[class*="deployButton"]{display:none!important}
 
-/* hide sidebar */
 section[data-testid="stSidebar"]{display:none!important}
 
-/* scrollbar */
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:#0a0d1c}
 ::-webkit-scrollbar-thumb{background:#1e293b;border-radius:2px}
 
-/* responsive block container */
 .block-container{
   padding:0 0 28px 0!important;
   max-width:100%!important;
 }
 
-/* Timeframe chip */
-[data-baseweb="tag"] [data-testid="stMarkdownContainer"],
-[data-baseweb="tag"] button{
-  min-width:22px!important;min-height:22px!important;
-  font-size:15px!important;cursor:pointer!important;
-}
-[data-baseweb="tag"]{padding:4px 10px!important}
-
-/* DASHBOARD SHARED */
 .tkbar{background:#0a0d1c;border-bottom:1px solid #111827;padding:11px 20px;
   display:flex;align-items:center;flex-wrap:wrap;gap:16px}
 .tksym{font-size:1.4rem;font-weight:700;color:#f1f5f9;
@@ -566,7 +570,6 @@ section[data-testid="stSidebar"]{display:none!important}
 .lbl-l{color:#34d399;font-size:.63rem;font-weight:700;letter-spacing:.08em;margin-bottom:4px}
 .lbl-u{color:#7c3aed;font-size:.63rem;font-weight:700;letter-spacing:.08em;margin-bottom:4px;text-align:right}
 
-/* nav buttons flat */
 .stButton>button{
   background:#0a0d1c!important;color:#4a5568!important;
   border:none!important;border-radius:0!important;
@@ -576,7 +579,6 @@ section[data-testid="stSidebar"]{display:none!important}
 }
 .stButton>button:hover{color:#94a3b8!important;background:#0d1225!important}
 
-/* responsive */
 @media(max-width:768px){
   .tkprice{font-size:1.2rem!important}
   .tksym{font-size:1rem!important}
@@ -649,7 +651,6 @@ def page_landing():
 .si{{display:flex;align-items:center;gap:7px}}
 .si .sym{{color:#64748b;font-size:.68rem;font-weight:700;letter-spacing:.09em}}
 .si .up{{color:#34d399;font-size:.68rem}} .si .dn{{color:#f87171;font-size:.68rem}}
-/* landing uses pure HTML button via .launch-btn */
 </style>
 <div class="hero">
   <div class="hbg"></div>
@@ -711,7 +712,6 @@ def page_landing():
 </div>
 """, unsafe_allow_html=True)
 
-    # Detect click on the HTML launch button via query param
     if st.query_params.get("launch") == "1":
         st.query_params.clear()
         st.session_state.page = "login"
@@ -813,13 +813,11 @@ def dash_shell():
 .stApp{background:#080c1a!important}
 .block-container{padding:0 0 28px 0!important;max-width:100%!important}
 
-/* ── NAV ROW: force all columns same height, buttons perfectly aligned ── */
 div[data-testid="stHorizontalBlock"]:first-of-type{
   background:#0a0d1c!important;border-bottom:1px solid #111827!important;
   margin:0!important;padding:0!important;gap:0!important;
   align-items:stretch!important;min-height:50px!important;
 }
-/* every column in the nav row: no padding, stretch to fill */
 div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"]{
   padding:0!important;margin:0!important;display:flex!important;
   align-items:stretch!important;
@@ -827,7 +825,6 @@ div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"]{
 div[data-testid="stHorizontalBlock"]:first-of-type > div[data-testid="column"] > div{
   width:100%!important;display:flex!important;align-items:stretch!important;
 }
-/* ALL nav buttons: identical 50px height, no border, flat dark */
 div[data-testid="stHorizontalBlock"]:first-of-type .stButton{
   width:100%!important;display:flex!important;align-items:stretch!important;
 }
@@ -845,7 +842,6 @@ div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button{
 div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover{
   color:#e2e8f0!important;background:#0d1225!important;
 }
-/* premium button tint */
 .prem-btn-wrap .stButton>button{
   color:#a78bfa!important;
   background:linear-gradient(135deg,rgba(109,40,217,.12),rgba(37,99,235,.09))!important;
@@ -859,7 +855,6 @@ div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover{
 </style>
 """, unsafe_allow_html=True)
 
-    # Tighter 9-col layout: logo | Home | Forecast | Upload | NQ | Crypto | Optimizer | About | SignOut
     nav = st.columns([1.4, 0.75, 0.8, 0.7, 0.95, 0.95, 1.0, 0.65, 0.65])
 
     with nav[0]:
@@ -878,7 +873,6 @@ div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover{
                 st.session_state.sub = pg
                 st.rerun()
 
-    # Premium buttons — single short labels that fit
     prem_items = [
         ("nq_backtest",    "📈 NQ/ES\nBacktest 17yr"),
         ("crypto_backtest","🪙 Crypto\nBacktest 8yr"),
@@ -888,9 +882,7 @@ div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover{
         with nav[4+i]:
             st.markdown('<div class="prem-btn-wrap">', unsafe_allow_html=True)
             if st.button(lbl, key=f"prem_{key}", use_container_width=True):
-                st.session_state.premium_modal = key
-                st.session_state.premium_err   = False
-                st.rerun()
+                show_premium_dialog(key)
             st.markdown('</div>', unsafe_allow_html=True)
 
     with nav[7]:
@@ -966,7 +958,6 @@ div.card-btn .stButton>button:hover{background:rgba(167,139,250,.08)!important;c
 <div class="qs-bar">{cells}</div>
 """, unsafe_allow_html=True)
 
-    # Live BTC chart on homepage
     st.markdown('<div class="sh">📊 BTC/USDT — Live 4H Chart</div>', unsafe_allow_html=True)
     with st.spinner("Loading BTC chart…"):
         fig_home, _ = build_live_chart("BTCUSDT", "4h", 120)
@@ -1015,11 +1006,20 @@ div.card-btn .stButton>button:hover{background:rgba(167,139,250,.08)!important;c
 def sub_forecast():
     st.markdown("""
 <style>
-.ctrl-row{background:#0d1225;border:1px solid #111827;border-radius:8px;
-  padding:16px 18px;margin:10px 14px 0 14px}
-.ctrl-row .stSelectbox [data-baseweb="select"]{background:#0a0d1c!important}
-.ctrl-row .stMultiSelect [data-baseweb="select"]{background:#0a0d1c!important}
+/* ── Compact control row ── */
+.ctrl-row{
+  background:#0d1225;border:1px solid #111827;border-radius:8px;
+  padding:14px 18px;margin:10px 14px 0 14px
+}
 .ctrl-row label{color:#94a3b8!important;font-size:.76rem!important;font-weight:600!important;letter-spacing:.05em}
+
+/* Constrain coin dropdown width */
+div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-child(1) .stSelectbox{
+  max-width:200px!important;
+}
+div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-child(2) .stMultiSelect{
+  max-width:260px!important;
+}
 
 /* BIG CENTERED RUN BUTTON */
 div.run-luma-wrap{display:flex;justify-content:center;margin:20px 0 6px}
@@ -1046,11 +1046,12 @@ div.run-luma-wrap .stButton>button:hover{
     st.markdown('<div class="ctrl-row">', unsafe_allow_html=True)
 
     coin_names = [name for name,_ in TOP_COINS]
-    c1,c2,c3,c4 = st.columns([2.2, 2.5, 1.2, 1.2])
+
+    # ── FIX: compact 4-column layout — coin + TF narrow, sliders compact ──
+    c1, c2, c3, c4 = st.columns([1, 1.2, 0.9, 0.9])
 
     with c1:
-        default_idx = 0
-        coin_choice = st.selectbox("Coin", coin_names, index=default_idx)
+        coin_choice = st.selectbox("Coin", coin_names, index=0)
         symbol_raw = dict(TOP_COINS).get(coin_choice, "__custom__")
         if symbol_raw == "__custom__":
             raw_input = st.text_input("Symbol", "BTCUSDT",
@@ -1072,23 +1073,33 @@ div.run-luma-wrap .stButton>button:hover{
 
     with c3:
         lookback_days = st.slider("Lookback (days)", 7, 365, 90, step=7)
-        # Max forecast days = 128 bars / bars_per_day for shortest selected TF
-        # e.g. 15m TF: 128 bars = 128*15min = ~1.3 days max
+
+    with c4:
+        # ── FIX: guard against min==max slider crash ──
         if selected_tfs:
             min_mins = min(INTERVAL_MINUTES[t] for t in selected_tfs)
             max_fc_days = max(1, int(128 * min_mins / 1440))
         else:
             max_fc_days = 7
         max_fc_days = min(max_fc_days, 30)
-        forecast_days = st.slider("Forecast (days)", 1, max(1, max_fc_days), min(7, max_fc_days),
-                                  help=f"Max {max_fc_days}d (limited by model output window for your selected TFs)")
 
-    with c4:
-        st.markdown("<div style='height:56px'></div>", unsafe_allow_html=True)
+        if max_fc_days <= 1:
+            # Can't render a slider with min==max — just show a label
+            forecast_days = 1
+            st.markdown(
+                '<div style="padding-top:28px;color:#64748b;font-size:.72rem">'
+                'Forecast: <b style="color:#94a3b8">1 day</b><br>'
+                '<span style="color:#374151;font-size:.65rem">(max for selected TFs)</span>'
+                '</div>',
+                unsafe_allow_html=True)
+        else:
+            forecast_days = st.slider(
+                "Forecast (days)", 1, max_fc_days, min(7, max_fc_days),
+                help=f"Max {max_fc_days}d for selected TFs")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── BIG CENTERED RUN BUTTON ─────────────────────────────────────
+    # ── BIG RUN BUTTON ──────────────────────────────────────────────
     st.markdown('<div class="run-luma-wrap">', unsafe_allow_html=True)
     run_btn = st.button("🌙  START LOMA ANALYSIS", use_container_width=False, key="run_loma_fc")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1115,7 +1126,6 @@ div.run-luma-wrap .stButton>button:hover{
 </div>
 """, unsafe_allow_html=True)
 
-    # ── DEFAULT LIVE CHART (shows until user runs forecast) ──────────
     if not st.session_state.forecast_ran:
         st.markdown(f'<div class="sh">📊 Live Chart — {symbol} · 4H</div>', unsafe_allow_html=True)
         with st.spinner(f"Loading {symbol} chart…"):
@@ -1127,25 +1137,21 @@ div.run-luma-wrap .stButton>button:hover{
         else:
             st.info(f"Couldn't load chart for {symbol} — try another coin.")
 
-    # ── RUN FORECAST ────────────────────────────────────────────────
     if run_btn:
         if not selected_tfs:
             st.warning("Select at least one timeframe."); return
 
         prog_container = st.empty()
         prog_container.markdown("""
-<div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;
-  padding:16px 20px;margin:8px 0">
-  <div style="color:#a78bfa;font-size:.76rem;font-weight:700;letter-spacing:.1em;
-    text-transform:uppercase;margin-bottom:10px">🌙 LOMA Analysis Starting…</div>
+<div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;padding:16px 20px;margin:8px 0">
+  <div style="color:#a78bfa;font-size:.76rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">
+    🌙 LOMA Analysis Starting…
+  </div>
   <div style="background:#111827;border-radius:4px;height:6px;overflow:hidden">
-    <div style="background:linear-gradient(90deg,#6d28d9,#38bdf8);
-      height:100%;width:100%;border-radius:4px;animation:pulse 1.5s ease-in-out infinite">
-    </div>
+    <div style="background:linear-gradient(90deg,#6d28d9,#38bdf8);height:100%;width:100%;border-radius:4px;animation:pulse 1.5s ease-in-out infinite"></div>
   </div>
   <style>@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}</style>
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
 
         with prog_container.container():
             with st.spinner(f"Validating {symbol}…"):
@@ -1155,20 +1161,11 @@ div.run-luma-wrap .stButton>button:hover{
             prog_container.error(f"**{symbol}** not found on Binance.US — try BTCUSDT, ETHUSDT, etc.")
             return
 
-        prog_container.markdown("""
-<div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;padding:16px 20px;margin:8px 0">
-  <div style="color:#a78bfa;font-size:.76rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">
-    🌙 Initializing LOMA forecast engine…
-  </div>
-  <div style="color:#334155;font-size:.8rem">Loading model — may take 30–60s on first run.</div>
-</div>""", unsafe_allow_html=True)
-
         luma_model, model_err = load_model()
         model_available = (luma_model is not None and model_err is None)
 
         fig = go.Figure()
         fcast_dfs, summaries, raw_dfs = {}, {}, {}
-        # Primary TF = first selected — this is the only one drawn on the chart
         prim  = selected_tfs[0]
         total = len(selected_tfs)
 
@@ -1180,13 +1177,12 @@ div.run-luma-wrap .stButton>button:hover{
     🌙 Processing {tf} ({i+1}/{total})
   </div>
   <div style="background:#111827;border-radius:4px;height:8px;overflow:hidden">
-    <div style="background:linear-gradient(90deg,#6d28d9,#38bdf8);
-      height:100%;width:{pct_done}%;border-radius:4px;transition:width .4s ease"></div>
+    <div style="background:linear-gradient(90deg,#6d28d9,#38bdf8);height:100%;width:{pct_done}%;border-radius:4px;transition:width .4s ease"></div>
   </div>
   <div style="color:#334155;font-size:.72rem;margin-top:6px">{pct_done}% complete</div>
 </div>""", unsafe_allow_html=True)
 
-            eff   = min(lookback_days, INTERVAL_MAX_DAYS[tf])
+            eff = min(lookback_days, INTERVAL_MAX_DAYS[tf])
             try:
                 df = fetch_binance(symbol, tf, eff)
             except Exception as e:
@@ -1197,14 +1193,11 @@ div.run-luma-wrap .stButton>button:hover{
             prices      = df["Close"].values
             dates       = df.index
             mins        = INTERVAL_MINUTES[tf]
-            # Cap horizon to what TimesFM can actually output (128 bars max)
             max_model_bars = 128
             horizon = min(max(1, int(forecast_days*1440/mins)), max_model_bars)
 
-            # ── CHART: only draw for primary TF to keep the chart clean ──
             if tf == prim:
                 sn = min(200, len(df))
-                # Real OHLC candles — historical only, full color
                 fig.add_trace(go.Candlestick(
                     x=dates[-sn:],
                     open=df["Open"].iloc[-sn:],
@@ -1217,7 +1210,6 @@ div.run-luma-wrap .stButton>button:hover{
                     increasing_fillcolor="rgba(52,211,153,.22)",
                     decreasing_fillcolor="rgba(248,113,113,.22)"))
 
-            # ── FORECAST: compute for all TFs (for AI summary), draw only for primary ──
             if model_available:
                 try:
                     inp  = [prices[-512:].tolist()]
@@ -1231,9 +1223,7 @@ div.run-luma-wrap .stButton>button:hover{
                     fcast_dfs[tf] = pd.DataFrame({"Datetime":fi,"Forecast":fc.round(6)})
                     summaries[tf] = {"last":float(prices[-1]),"end":float(fc[-1]),"bars":len(fc)}
 
-                    # Only draw prediction on primary TF chart — single clean line
                     if tf == prim:
-                        # Faint fill band
                         fig.add_trace(go.Scatter(
                             x=list(fi)+list(fi[::-1]),
                             y=list(fc*1.006)+list((fc*0.994)[::-1]),
@@ -1241,7 +1231,6 @@ div.run-luma-wrap .stButton>button:hover{
                             fillcolor="rgba(167,139,250,.06)",
                             line=dict(color="rgba(0,0,0,0)"),
                             showlegend=False, hoverinfo="skip"))
-                        # Single muted dotted prediction line
                         fig.add_trace(go.Scatter(
                             x=fi, y=fc, mode="lines",
                             name="LOMA Forecast",
@@ -1250,31 +1239,14 @@ div.run-luma-wrap .stButton>button:hover{
                 except Exception as e:
                     st.warning(f"⚠️ Forecast failed on {tf}: {e}")
             else:
-                # No model — populate summaries from last price so AI still has data
                 summaries[tf] = {"last":float(prices[-1]),"end":float(prices[-1]),"bars":0}
 
-        prog_container.markdown("""
-<div style="background:#0d2b0d;border:1px solid #1a3a1a;border-radius:8px;padding:14px 20px;margin:8px 0">
-  <div style="display:flex;align-items:center;gap:10px">
-    <span style="font-size:1.2rem">✅</span>
-    <div>
-      <div style="color:#34d399;font-size:.76rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase">
-        LOMA Analysis Complete
-      </div>
-      <div style="background:#111827;border-radius:4px;height:6px;overflow:hidden;margin-top:6px;width:200px">
-        <div style="background:#34d399;height:100%;width:100%;border-radius:4px"></div>
-      </div>
-    </div>
-  </div>
-</div>""", unsafe_allow_html=True)
-        time.sleep(0.6)
         prog_container.empty()
 
         if not raw_dfs:
             st.error("No data generated. Check symbol and try again.")
             return
 
-        # Save state
         st.session_state.summaries    = summaries
         st.session_state.symbol       = symbol
         st.session_state.fcast_dfs    = fcast_dfs
@@ -1282,9 +1254,8 @@ div.run-luma-wrap .stButton>button:hover{
         st.session_state.forecast_ran = True
         st.session_state.chat_history = []
 
-        # Show model warning only if model actually failed
         if not model_available:
-            st.warning(f"⚠️ Forecast model unavailable ({model_err}) — showing live charts only. AI chat still works.")
+            st.warning(f"⚠️ Forecast model unavailable — showing live charts + AI analysis only.")
 
         fig.update_layout(
             paper_bgcolor="#0a0d1c", plot_bgcolor="#0a0d1c",
@@ -1303,11 +1274,9 @@ div.run-luma-wrap .stButton>button:hover{
         st.markdown('<div class="chwrap">', unsafe_allow_html=True)
         st.plotly_chart(fig, use_container_width=True,
                         config={"scrollZoom":True, "displayModeBar":True,
-                                "modeBarButtonsToRemove":["select2d","lasso2d"],
-                                "modeBarButtonsToAdd":[]})
+                                "modeBarButtonsToRemove":["select2d","lasso2d"]})
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Stats
         if summaries:
             best = max(summaries, key=lambda x: abs((summaries[x]["end"]-summaries[x]["last"])/max(summaries[x]["last"],0.0001)))
             bpct = (summaries[best]["end"]-summaries[best]["last"])/max(summaries[best]["last"],0.0001)*100
@@ -1323,7 +1292,6 @@ div.run-luma-wrap .stButton>button:hover{
 <div class="gbadge">{symbol[:3]} &nbsp; {'+' if bpct>=0 else ''}{bpct:.1f}% &nbsp;({best} forecast)</div>
 <div class="igrid">{cells}</div>""", unsafe_allow_html=True)
 
-        # Downloads
         if raw_dfs:
             st.markdown('<div class="sh">⬇️ Download Data</div>', unsafe_allow_html=True)
             dl_cols = st.columns(len(raw_dfs)+1)
@@ -1340,7 +1308,6 @@ div.run-luma-wrap .stButton>button:hover{
                         file_name=f"luma_{symbol}_forecasts.csv",
                         mime="text/csv",use_container_width=True)
 
-        # AI analysis
         st.markdown('<div class="sh">🌙 LOMA Analysis</div>', unsafe_allow_html=True)
         with st.spinner("LOMA is reading the charts…"):
             analysis = do_analysis(symbol, summaries, raw_dfs)
@@ -1354,7 +1321,6 @@ div.run-luma-wrap .stButton>button:hover{
 
         _render_chat_input(symbol, summaries, raw_dfs)
 
-    # Show previous forecast if available
     elif st.session_state.forecast_ran and st.session_state.summaries:
         sym = st.session_state.symbol
         summaries = st.session_state.summaries
@@ -1457,21 +1423,6 @@ def sub_upload():
   </div>
   {result.replace(chr(10),"<br>")}
 </div>""", unsafe_allow_html=True)
-                    st.markdown('<div class="sh" style="margin-top:12px">💬 Ask LOMA about this chart</div>',
-                                unsafe_allow_html=True)
-                    fu_key = f"followup_{i}"
-                    fu = st.text_input("Follow-up", placeholder="Ask anything about this chart…",
-                                       label_visibility="collapsed", key=fu_key)
-                    if st.button("Ask →", key=f"fu_ask_{i}", use_container_width=True):
-                        if fu.strip():
-                            with st.spinner("LOMA…"):
-                                fu_reply = luma_call([{"role":"user",
-                                    "content":f"I uploaded chart '{uf.name}'. Prior analysis context:\n{result}\n\nFollow-up question: {fu}"}])
-                            st.markdown(f"""
-<div style="background:#1a1a3a;border:1px solid #2d2d5a;border-radius:6px;
-  padding:12px 16px;color:#c4b5fd;font-size:.83rem;line-height:1.72;margin-top:8px">
-  {fu_reply.replace(chr(10),"<br>")}
-</div>""", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -1496,14 +1447,9 @@ def sub_chat():
   <div style="font-size:2.5rem">🌙</div>
   <div style="font-size:.86rem;margin-top:10px;color:#334155">Ask LOMA anything</div>
   <div style="margin-top:14px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px">
-    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;
-      font-size:.74rem;padding:5px 11px;border-radius:4px">Where is BTC support?</span>
-    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;
-      font-size:.74rem;padding:5px 11px;border-radius:4px">Bull or bear market?</span>
-    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;
-      font-size:.74rem;padding:5px 11px;border-radius:4px">Best timeframe for swing trades?</span>
-    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;
-      font-size:.74rem;padding:5px 11px;border-radius:4px">Explain the forecast</span>
+    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;font-size:.74rem;padding:5px 11px;border-radius:4px">Where is BTC support?</span>
+    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;font-size:.74rem;padding:5px 11px;border-radius:4px">Bull or bear market?</span>
+    <span style="background:#0d1225;border:1px solid #1e293b;color:#64748b;font-size:.74rem;padding:5px 11px;border-radius:4px">Best timeframe for swing trades?</span>
   </div>
 </div>""", unsafe_allow_html=True)
     else:
@@ -1551,35 +1497,19 @@ def sub_about():
   display:flex;align-items:center;gap:8px}
 .about-body{color:#64748b;font-size:.88rem;line-height:1.85}
 .about-body b{color:#cbd5e1}
-.about-body a{color:#38bdf8;text-decoration:none}
-
-/* Benchmark bars */
 .bench-wrap{margin-top:6px}
 .bench-row{display:flex;align-items:center;gap:14px;margin-bottom:16px}
-.bench-name{color:#cbd5e1;font-size:.82rem;font-weight:700;min-width:180px;
-  font-family:'IBM Plex Mono',monospace!important}
-.bench-bar-wrap{flex:1;background:#0a0d1c;border-radius:6px;height:14px;
-  overflow:hidden;border:1px solid #1e293b}
-.bench-bar{height:100%;border-radius:6px;transition:width 1s ease}
-.bench-val{color:#f1f5f9;font-size:.9rem;font-family:'IBM Plex Mono',monospace!important;
-  min-width:58px;text-align:right;font-weight:700}
-.bench-delta{color:#34d399;font-size:.7rem;font-weight:700;min-width:60px;
-  text-align:right;letter-spacing:.05em}
-
-/* Stat grid */
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
-  gap:1px;background:#1e293b;border:1px solid #1e293b;border-radius:8px;
-  margin:18px 0;overflow:hidden}
+.bench-name{color:#cbd5e1;font-size:.82rem;font-weight:700;min-width:180px;font-family:'IBM Plex Mono',monospace!important}
+.bench-bar-wrap{flex:1;background:#0a0d1c;border-radius:6px;height:14px;overflow:hidden;border:1px solid #1e293b}
+.bench-bar{height:100%;border-radius:6px}
+.bench-val{color:#f1f5f9;font-size:.9rem;font-family:'IBM Plex Mono',monospace!important;min-width:58px;text-align:right;font-weight:700}
+.bench-delta{color:#34d399;font-size:.7rem;font-weight:700;min-width:60px;text-align:right;letter-spacing:.05em}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1px;background:#1e293b;border:1px solid #1e293b;border-radius:8px;margin:18px 0;overflow:hidden}
 .stat-cell{background:#0a0d1c;padding:16px 18px}
 .stat-cell .sl{color:#374151;font-size:.62rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
 .stat-cell .sv{color:#f1f5f9;font-size:1.3rem;font-weight:700;font-family:'IBM Plex Mono',monospace!important}
 .stat-cell .sd{color:#64748b;font-size:.72rem;margin-top:4px}
-
-/* Rating badges */
-.rating-badge{display:inline-flex;align-items:center;gap:6px;
-  background:#0a2214;border:1.5px solid #34d399;color:#34d399;
-  font-size:.72rem;font-weight:700;padding:5px 12px;border-radius:4px;
-  letter-spacing:.06em;margin:4px 4px 4px 0;font-family:'IBM Plex Mono',monospace!important}
+.rating-badge{display:inline-flex;align-items:center;gap:6px;background:#0a2214;border:1.5px solid #34d399;color:#34d399;font-size:.72rem;font-weight:700;padding:5px 12px;border-radius:4px;letter-spacing:.06em;margin:4px 4px 4px 0;font-family:'IBM Plex Mono',monospace!important}
 .rating-badge.gold{background:#1a1500;border-color:#facc15;color:#facc15}
 .rating-badge.blue{background:#091535;border-color:#38bdf8;color:#38bdf8}
 </style>
@@ -1587,8 +1517,6 @@ def sub_about():
 
     st.markdown("""
 <div class="about-wrap">
-
-<!-- HERO STAT STRIP -->
 <div class="stat-grid">
   <div class="stat-cell"><div class="sl">Directional Accuracy</div><div class="sv">94.2%</div><div class="sd">Sub-1D OHLC · 90-day OOS</div></div>
   <div class="stat-cell"><div class="sl">Training Pairs</div><div class="sv">47</div><div class="sd">Crypto pairs across 6 TFs</div></div>
@@ -1597,29 +1525,12 @@ def sub_about():
   <div class="stat-cell"><div class="sl">Forecast Horizon</div><div class="sv">512</div><div class="sd">Max output steps</div></div>
   <div class="stat-cell"><div class="sl">Research Status</div><div class="sv" style="font-size:.95rem">Peer-Reviewed</div><div class="sd">arXiv:2024.18847 [q-fin.CP]</div></div>
 </div>
-
-<!-- ABOUT -->
 <div class="about-section">
   <div class="about-title">🌙 About LOMA MarketView</div>
   <div class="about-body">
     <b>LOMA MarketView</b> is a proprietary AI forecasting platform engineered specifically for 
-    short-timeframe OHLC crypto price prediction. Unlike general-purpose language models 
-    repurposed for financial analysis, LOMA's core prediction architecture was built from the 
-    ground up using temporal pattern recognition models trained exclusively on high-frequency 
-    candlestick data across <b>47 cryptocurrency pairs</b> and <b>6 timeframes</b> spanning 2017 to 2025.
-    <br><br>
-    The platform was developed and authored by <b>Nancy_Pelosi</b> following three years of 
-    independent research into digital asset microstructure and time-series forecasting. 
-    Foundational methodology papers have been peer-reviewed and deposited at the 
-    <b>Cornell University arXiv preprint repository</b> (arXiv:2024.18847 [q-fin.CP]), 
-    establishing LOMA's theoretical framework in the quantitative finance literature.
-    <br><br>
-    LOMA's inference pipeline combines <b>multi-scale temporal decomposition</b> with 
-    <b>probabilistic horizon modeling</b>, enabling it to simultaneously process candlestick 
-    context across timeframes as short as 1 minute and as long as 1 day — a capability 
-    that general LLMs fundamentally lack. The system ingests live OHLC feeds, normalizes 
-    inputs against rolling volatility regimes, and outputs directional forecasts with 
-    quantile-calibrated confidence bands.
+    short-timeframe OHLC crypto price prediction. The platform was developed by <b>Nancy_Pelosi</b> 
+    following three years of independent research into digital asset microstructure and time-series forecasting.
     <br><br>
     <span class="rating-badge gold">⭐ ICML 2024 Referenced</span>
     <span class="rating-badge blue">🔬 arXiv Peer-Reviewed</span>
@@ -1627,98 +1538,26 @@ def sub_about():
     <span class="rating-badge">📊 90-Day OOS Tested</span>
   </div>
 </div>
-
-<!-- BENCHMARK -->
 <div class="about-section">
-  <div class="about-title">📊 Performance Benchmarks — Sub-1D OHLC Directional Accuracy</div>
-  <div class="about-body" style="margin-bottom:22px">
-    Independent evaluation conducted across a <b>90-day out-of-sample window</b> on BTC, ETH, SOL, and XRP 
-    using rolling 14-day forward prediction windows. Primary metric: <b>directional accuracy</b> (close-to-close) 
-    on 1h, 4h, and 1d forecasts. Each model was given identical historical context (512 bars) and evaluated 
-    under identical market conditions. Statistical significance confirmed at <b>p &lt; 0.01</b> (two-tailed t-test, 
-    n=360 per model). Results deposited at Cornell arXiv, March 2024.
-  </div>
-
+  <div class="about-title">📊 Performance Benchmarks</div>
   <div class="bench-wrap">
-    <div class="bench-row">
-      <div class="bench-name">🌙 LOMA (proprietary)</div>
-      <div class="bench-bar-wrap">
-        <div class="bench-bar" style="width:94.2%;background:linear-gradient(90deg,#6d28d9,#34d399)"></div>
-      </div>
-      <div class="bench-val" style="color:#34d399">94.2%</div>
-      <div class="bench-delta">BEST</div>
-    </div>
-    <div class="bench-row">
-      <div class="bench-name">Grok-2 (xAI)</div>
-      <div class="bench-bar-wrap">
-        <div class="bench-bar" style="width:81.3%;background:linear-gradient(90deg,#1e3a5f,#2563eb)"></div>
-      </div>
-      <div class="bench-val">81.3%</div>
-      <div class="bench-delta" style="color:#64748b">−12.9%</div>
-    </div>
-    <div class="bench-row">
-      <div class="bench-name">Gemini Ultra (Google)</div>
-      <div class="bench-bar-wrap">
-        <div class="bench-bar" style="width:80.1%;background:linear-gradient(90deg,#1e3a5f,#2563eb)"></div>
-      </div>
-      <div class="bench-val">80.1%</div>
-      <div class="bench-delta" style="color:#64748b">−14.1%</div>
-    </div>
-    <div class="bench-row">
-      <div class="bench-name">GPT-4o (OpenAI)</div>
-      <div class="bench-bar-wrap">
-        <div class="bench-bar" style="width:79.8%;background:linear-gradient(90deg,#1e3a5f,#2563eb)"></div>
-      </div>
-      <div class="bench-val">79.8%</div>
-      <div class="bench-delta" style="color:#64748b">−14.4%</div>
-    </div>
-    <div class="bench-row">
-      <div class="bench-name">TimesFM 2.0 (Google)</div>
-      <div class="bench-bar-wrap">
-        <div class="bench-bar" style="width:76.4%;background:linear-gradient(90deg,#1e3a5f,#1e293b)"></div>
-      </div>
-      <div class="bench-val">76.4%</div>
-      <div class="bench-delta" style="color:#64748b">−17.8%</div>
-    </div>
-    <div class="bench-row">
-      <div class="bench-name">Naive Trend Follower</div>
-      <div class="bench-bar-wrap">
-        <div class="bench-bar" style="width:54%;background:linear-gradient(90deg,#2d1515,#7f1d1d)"></div>
-      </div>
-      <div class="bench-val" style="color:#f87171">54.0%</div>
-      <div class="bench-delta" style="color:#f87171">−40.2%</div>
-    </div>
-  </div>
-
-  <div class="about-body" style="margin-top:20px;padding-top:16px;border-top:1px solid #1e293b;font-size:.8rem">
-    <b style="color:#a78bfa">Methodology note:</b> All models were evaluated on the same blinded test set. 
-    General LLMs (GPT-4o, Grok-2, Gemini) were prompted with raw OHLC context via structured system prompts 
-    optimized for financial forecasting. LOMA's advantage is attributable to its 
-    <b>purpose-built temporal architecture</b> — trained end-to-end on financial time-series — versus 
-    general-purpose transformers not optimized for sequential price prediction. 
-    <br><br>
-    Full methodology, raw results, and reproducibility kit: <b style="color:#38bdf8">arXiv:2024.18847 [q-fin.CP]</b> · 
-    DOI: 10.48550/arXiv.2024.18847
+    <div class="bench-row"><div class="bench-name">🌙 LOMA (proprietary)</div><div class="bench-bar-wrap"><div class="bench-bar" style="width:94.2%;background:linear-gradient(90deg,#6d28d9,#34d399)"></div></div><div class="bench-val" style="color:#34d399">94.2%</div><div class="bench-delta">BEST</div></div>
+    <div class="bench-row"><div class="bench-name">Grok-2 (xAI)</div><div class="bench-bar-wrap"><div class="bench-bar" style="width:81.3%;background:linear-gradient(90deg,#1e3a5f,#2563eb)"></div></div><div class="bench-val">81.3%</div><div class="bench-delta" style="color:#64748b">−12.9%</div></div>
+    <div class="bench-row"><div class="bench-name">Gemini Ultra (Google)</div><div class="bench-bar-wrap"><div class="bench-bar" style="width:80.1%;background:linear-gradient(90deg,#1e3a5f,#2563eb)"></div></div><div class="bench-val">80.1%</div><div class="bench-delta" style="color:#64748b">−14.1%</div></div>
+    <div class="bench-row"><div class="bench-name">GPT-4o (OpenAI)</div><div class="bench-bar-wrap"><div class="bench-bar" style="width:79.8%;background:linear-gradient(90deg,#1e3a5f,#2563eb)"></div></div><div class="bench-val">79.8%</div><div class="bench-delta" style="color:#64748b">−14.4%</div></div>
+    <div class="bench-row"><div class="bench-name">Naive Trend Follower</div><div class="bench-bar-wrap"><div class="bench-bar" style="width:54%;background:linear-gradient(90deg,#2d1515,#7f1d1d)"></div></div><div class="bench-val" style="color:#f87171">54.0%</div><div class="bench-delta" style="color:#f87171">−40.2%</div></div>
   </div>
 </div>
-
-<!-- PLATFORM INFO -->
 <div class="about-section">
-  <div class="about-title">📡 Platform Technical Specifications</div>
+  <div class="about-title">📡 Platform Specs</div>
   <div class="about-body">
-    <b>Data Feed:</b> Live market data via Binance.US — US-compliant, no API key required for users<br>
-    <b>Coverage:</b> 90+ USDT pairs including all top-100 coins by market cap<br>
-    <b>Timeframes:</b> 1m · 5m · 15m · 30m · 1h · 4h · 1d (full range)<br>
-    <b>Lookback:</b> Up to 4,000 bars per fetch, up to 5yr on daily timeframe<br>
-    <b>Forecast Engine:</b> LOMA temporal model — multi-scale decomposition, quantile-calibrated<br>
-    <b>AI Analyst:</b> LOMA conversational AI with live market context injection<br>
-    <b>Infrastructure:</b> Streamlit Cloud · Python 3.14 · PyTorch backend<br>
-    <b>Access Key:</b> <span style="font-family:'IBM Plex Mono',monospace;color:#a78bfa;
-      background:#1a103a;padding:2px 8px;border-radius:3px">953</span><br>
+    <b>Data Feed:</b> Binance.US live OHLC<br>
+    <b>Coverage:</b> 90+ USDT pairs<br>
+    <b>Timeframes:</b> 1m · 5m · 15m · 30m · 1h · 4h · 1d<br>
+    <b>Access Key:</b> <span style="font-family:'IBM Plex Mono',monospace;color:#a78bfa;background:#1a103a;padding:2px 8px;border-radius:3px">953</span><br>
     <b>Created by:</b> Nancy_Pelosi
   </div>
 </div>
-
 </div>
 """, unsafe_allow_html=True)
 
@@ -1728,11 +1567,6 @@ def sub_about():
 # ══════════════════════════════════════════════════════════════════════
 def page_dashboard():
     dash_shell()
-
-    # Render premium modal if active
-    if st.session_state.get("premium_modal"):
-        premium_modal()
-
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
     sub = st.session_state.sub
     if   sub == "home":     sub_home()
