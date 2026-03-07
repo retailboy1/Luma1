@@ -5,6 +5,7 @@ Run: streamlit run luma_fixed.py
 """
 
 import streamlit as st
+import streamlit.components.v1 as st_components
 import requests
 import pandas as pd
 import numpy as np
@@ -1049,160 +1050,188 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 </div>
 
 <script>
+// Enter-to-submit for chat inputs
 (function() {{
-  var VOICE_TEXT = "{voice_tts}";
-  var speaking = false;
-  var muted = false;
-  var synth = null;
-
-  // Get speech synthesis from top window to escape iframes
-  function getSynth() {{
-    try {{ return window.top.speechSynthesis; }} catch(e) {{}}
-    try {{ return window.parent.speechSynthesis; }} catch(e) {{}}
-    try {{ return window.speechSynthesis; }} catch(e) {{}}
-    return null;
-  }}
-
-  function getVoices() {{
-    var s = getSynth();
-    if (!s) return [];
-    return s.getVoices();
-  }}
-
-  function setBtn(state) {{
-    var btn = document.getElementById('tts-toggle-btn');
-    var dot = document.getElementById('tts-dot');
-    if (!btn || !dot) return;
-    if (state === 'speaking') {{
-      btn.textContent = '🔇 Mute';
-      btn.classList.remove('tts-off');
-      dot.classList.remove('off');
-    }} else {{
-      btn.textContent = '🔊 Play';
-      btn.classList.add('tts-off');
-      dot.classList.add('off');
-    }}
-  }}
-
-  function lomaSpeak() {{
-    var s = getSynth();
-    if (!s) {{ setBtn('stopped'); return; }}
-    s.cancel();
-    muted = false;
-    speaking = true;
-    setBtn('speaking');
-
-    // Break into sentences for reliability
-    var sentences = VOICE_TEXT.match(/[^.!?]+[.!?]+/g) || [VOICE_TEXT];
-    var idx = 0;
-
-    function next() {{
-      if (idx >= sentences.length || muted) {{
-        speaking = false;
-        if (!muted) setBtn('stopped');
-        return;
-      }}
-      var u = new (window.top.SpeechSynthesisUtterance || SpeechSynthesisUtterance)(sentences[idx++].trim());
-      u.rate = 0.88;
-      u.pitch = 1.05;
-      u.volume = 1.0;
-      var voices = getVoices();
-      var v = voices.find(function(v) {{
-        return v.name === 'Samantha' || v.name === 'Karen' || v.name === 'Moira' ||
-               v.name === 'Fiona' || (v.lang === 'en-US' && v.name.includes('Female'));
-      }}) || voices.find(function(v) {{ return v.lang && v.lang.startsWith('en'); }});
-      if (v) u.voice = v;
-      u.onend = next;
-      u.onerror = next;
-      s.speak(u);
-    }}
-    next();
-  }}
-
-  window.lomaToggle = function() {{
-    if (speaking && !muted) {{
-      muted = true;
-      speaking = false;
-      var s = getSynth();
-      if (s) s.cancel();
-      setBtn('stopped');
-    }} else {{
-      lomaSpeak();
-    }}
-  }};
-
-  // Auto-start — needs voices to be loaded first
-  function tryAutoStart() {{
-    var s = getSynth();
-    if (!s) return;
-    var voices = getVoices();
-    if (voices.length > 0) {{
-      // Small delay to ensure DOM is ready
-      setTimeout(lomaSpeak, 600);
-    }} else {{
-      // Wait for voices to load
-      try {{
-        (window.top.speechSynthesis || window.speechSynthesis).onvoiceschanged = function() {{
-          setTimeout(lomaSpeak, 400);
-        }};
-      }} catch(e) {{
-        setTimeout(lomaSpeak, 1200);
-      }}
-    }}
-  }}
-
-  // Init on DOM ready
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', tryAutoStart);
-  }} else {{
-    tryAutoStart();
-  }}
-
-  // Enter-to-submit for ALL chat inputs on the page
   function hookEnterKeys() {{
-    // Hook into parent document (Streamlit's main page)
     function attachToDoc(doc) {{
       doc.addEventListener('keydown', function(e) {{
         if (e.key !== 'Enter' || e.shiftKey) return;
         var active = doc.activeElement;
         if (!active) return;
-        var isInput = active.tagName === 'INPUT' && active.type !== 'submit';
-        if (!isInput) return;
-        // Find the closest submit/ask button
-        var container = active.closest('[data-testid="stHorizontalBlock"]') ||
-                        active.closest('[data-testid="column"]') ||
-                        active.parentElement;
-        // Walk up and find a button
-        var found = null;
-        var el = container;
-        for (var i = 0; i < 8 && el; i++) {{
-          var btns = el.querySelectorAll('button');
+        if (active.tagName !== 'INPUT') return;
+        var el = active;
+        for (var i = 0; i < 10 && el; i++) {{
+          var btns = el.querySelectorAll ? el.querySelectorAll('button') : [];
           for (var j = 0; j < btns.length; j++) {{
             var txt = btns[j].textContent.trim().toLowerCase();
-            if (txt.includes('ask') || txt.includes('send') || txt.includes('continue') || txt.includes('→')) {{
-              found = btns[j];
-              break;
+            if (txt.includes('ask') || txt.includes('→') || txt.includes('send') || txt.includes('continue') || txt.includes('sign in')) {{
+              e.preventDefault();
+              btns[j].click();
+              return;
             }}
           }}
-          if (found) break;
           el = el.parentElement;
-        }}
-        if (found) {{
-          e.preventDefault();
-          found.click();
         }}
       }}, true);
     }}
-
     try {{ attachToDoc(window.top.document); }} catch(e) {{}}
     try {{ attachToDoc(window.parent.document); }} catch(e) {{}}
     attachToDoc(document);
   }}
-
-  setTimeout(hookEnterKeys, 800);
+  setTimeout(hookEnterKeys, 500);
 }})();
 </script>
 """, unsafe_allow_html=True)
+
+
+def _inject_tts(voice_text):
+    """
+    Inject TTS via st_components.html — gets its own real browser iframe
+    where speechSynthesis works reliably without user-gesture restrictions.
+    The button is rendered at 0px height so it's invisible, but its click
+    is triggered via JS automatically after 300ms.
+    """
+    # Escape for JS string
+    safe = (voice_text
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("'", "\\'")
+            .replace("\n", " ")
+            .replace("\r", ""))
+
+    st_components.html(f"""
+<!DOCTYPE html>
+<html>
+<head><style>
+  body{{margin:0;padding:0;background:transparent;overflow:hidden}}
+  #loma-tts-btn{{
+    background:rgba(52,211,153,.18);
+    border:1px solid rgba(52,211,153,.5);
+    color:#34d399;font-size:11px;font-weight:700;letter-spacing:.1em;
+    padding:6px 16px;border-radius:5px;cursor:pointer;
+    font-family:monospace;text-transform:uppercase;
+    display:block;width:100%;box-sizing:border-box;
+  }}
+  #loma-tts-btn.off{{background:rgba(100,116,139,.1);border-color:rgba(100,116,139,.3);color:#64748b}}
+  #status{{color:#475569;font-size:10px;margin-top:4px;font-family:monospace;text-align:center}}
+</style></head>
+<body>
+<button id="loma-tts-btn" onclick="lomaToggle()">🔊 LOMA Speaking…</button>
+<div id="status">Loading voices…</div>
+<script>
+var TEXT = "{safe}";
+var speaking = false;
+var muted = false;
+var synth = window.speechSynthesis;
+
+function setUI(state) {{
+  var btn = document.getElementById('loma-tts-btn');
+  var st  = document.getElementById('status');
+  if (state === 'speaking') {{
+    btn.textContent = '🔇 Mute LOMA';
+    btn.classList.remove('off');
+    if (st) st.textContent = 'Speaking…';
+  }} else if (state === 'done') {{
+    btn.textContent = '🔊 Replay';
+    btn.classList.add('off');
+    if (st) st.textContent = 'Done.';
+  }} else {{
+    btn.textContent = '🔊 Play LOMA';
+    btn.classList.add('off');
+    if (st) st.textContent = 'Stopped.';
+  }}
+}}
+
+function pickVoice() {{
+  var voices = synth.getVoices();
+  return (
+    voices.find(v => v.name === 'Samantha') ||
+    voices.find(v => v.name === 'Karen') ||
+    voices.find(v => v.name === 'Moira') ||
+    voices.find(v => v.name === 'Fiona') ||
+    voices.find(v => v.lang === 'en-US' && v.localService) ||
+    voices.find(v => v.lang && v.lang.startsWith('en-')) ||
+    voices[0]
+  );
+}}
+
+function speak() {{
+  synth.cancel();
+  muted = false;
+  speaking = true;
+  setUI('speaking');
+
+  var sentences = TEXT.match(/[^.!?]+[.!?]+/g) || [TEXT];
+  var idx = 0;
+
+  function next() {{
+    if (idx >= sentences.length || muted) {{
+      speaking = false;
+      setUI(muted ? 'stopped' : 'done');
+      return;
+    }}
+    var sentence = sentences[idx++].trim();
+    if (!sentence) {{ next(); return; }}
+    var u = new SpeechSynthesisUtterance(sentence);
+    u.rate  = 0.88;
+    u.pitch = 1.05;
+    u.volume = 1.0;
+    var v = pickVoice();
+    if (v) u.voice = v;
+    u.onend = next;
+    u.onerror = function(e) {{
+      // Chrome bug: cancel and retry remaining
+      if (!muted) setTimeout(next, 100);
+    }};
+    synth.speak(u);
+  }}
+
+  // Chrome fix: keep synth alive with periodic resume
+  var keepAlive = setInterval(function() {{
+    if (!speaking) {{ clearInterval(keepAlive); return; }}
+    synth.pause(); synth.resume();
+  }}, 10000);
+
+  next();
+}}
+
+window.lomaToggle = function() {{
+  if (speaking) {{
+    muted = true;
+    speaking = false;
+    synth.cancel();
+    setUI('stopped');
+  }} else {{
+    speak();
+  }}
+}};
+
+// Wait for voices, then auto-speak
+function init() {{
+  var st = document.getElementById('status');
+  var voices = synth.getVoices();
+  if (voices.length > 0) {{
+    if (st) st.textContent = 'Ready.';
+    // Small delay so browser registers this iframe as active
+    setTimeout(speak, 400);
+  }} else {{
+    synth.onvoiceschanged = function() {{
+      if (st) st.textContent = 'Voices loaded.';
+      setTimeout(speak, 300);
+    }};
+    // Fallback if onvoiceschanged never fires
+    setTimeout(function() {{
+      if (!speaking) speak();
+    }}, 1500);
+  }}
+}}
+
+init();
+</script>
+</body>
+</html>
+""", height=52, scrolling=False)
+
 
 
 def do_analysis(sym, summaries, raw_dfs):
@@ -2270,6 +2299,7 @@ div.run-luma-wrap .stButton>button:active{
             st.session_state.initial_analysis = voice_text
 
         _render_analysis_panel(symbol, summaries, raw_dfs, voice_text)
+        _inject_tts(voice_text)
         _render_chat_input(symbol, summaries, raw_dfs)
 
     elif st.session_state.forecast_ran and st.session_state.summaries:
