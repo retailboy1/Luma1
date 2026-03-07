@@ -22,7 +22,7 @@ PASSWORD         = "953"
 PREMIUM_PASSWORD = "password"
 
 # ── API keys ──────────────────────────────────────────────────────────
-OPENROUTER_KEY   = "sk-or-v1-a58c720a8dcf9c201ce28SjFSqSJ6DYAcBJrNGN76hEhcij5vtyJK5G819CvV7Fm"
+OPENROUTER_KEY   = "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"
 OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
 HF_KEY           = "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"
 
@@ -325,66 +325,284 @@ def _ollama_local_call(messages):
         pass
     raise RuntimeError("Ollama not available")
 
-def _fallback_analysis(sym, summaries):
-    """Generate a rule-based analysis when all AI is unavailable."""
-    if not summaries:
-        return (f"**{sym} Technical Overview**\n\n"
-                "Run a forecast first to load market data, then I'll give you a full read.")
+def _compute_technicals(df):
+    c = df["Close"].values
+    h = df["High"].values
+    l = df["Low"].values
+    v = df["Volume"].values if "Volume" in df.columns else None
+    n = len(c)
 
-    lines = [f"**{sym} — LOMA Technical Read**\n"]
-    bullish_count = 0
+    def ema(arr, period):
+        k = 2.0 / (period + 1)
+        out = [arr[0]]
+        for x in arr[1:]:
+            out.append(x * k + out[-1] * (1 - k))
+        return np.array(out)
+
+    ema9  = ema(c, 9)[-1]  if n >= 9  else c[-1]
+    ema21 = ema(c, 21)[-1] if n >= 21 else c[-1]
+    ema50 = ema(c, 50)[-1] if n >= 50 else c[-1]
+
+    rsi = 50.0
+    if n >= 15:
+        deltas = np.diff(c[-15:])
+        gains  = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        avg_g, avg_l = gains.mean(), losses.mean()
+        rsi = 100.0 if avg_l == 0 else 100 - (100 / (1 + avg_g / avg_l))
+
+    window   = min(50, n)
+    recent_h = h[-window:]
+    recent_l = l[-window:]
+
+    pivots_h, pivots_l = [], []
+    for i in range(2, len(recent_h) - 2):
+        if recent_h[i] > recent_h[i-1] and recent_h[i] > recent_h[i-2] and \
+           recent_h[i] > recent_h[i+1] and recent_h[i] > recent_h[i+2]:
+            pivots_h.append(recent_h[i])
+        if recent_l[i] < recent_l[i-1] and recent_l[i] < recent_l[i-2] and \
+           recent_l[i] < recent_l[i+1] and recent_l[i] < recent_l[i+2]:
+            pivots_l.append(recent_l[i])
+
+    price = c[-1]
+    res_levels = sorted([x for x in pivots_h if x > price])
+    sup_levels = sorted([x for x in pivots_l if x < price], reverse=True)
+    resistance = res_levels[0] if res_levels else max(recent_h)
+    support    = sup_levels[0] if sup_levels else min(recent_l)
+
+    atr = 0.0
+    if n >= 14:
+        tr_vals = [max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1])) for i in range(-14, 0)]
+        atr = float(np.mean(tr_vals))
+    else:
+        atr = (max(recent_h) - min(recent_l)) / window
+
+    vol_trend = "rising" if (v is not None and len(v) >= 10 and
+                              v[-5:].mean() > v[-10:-5].mean()) else "flat/falling"
+    mom_5 = (c[-1] - c[-5]) / c[-5] * 100 if n >= 5 else 0.0
+
+    return {
+        "price": price, "ema9": ema9, "ema21": ema21, "ema50": ema50,
+        "rsi": rsi, "support": support, "resistance": resistance,
+        "atr": atr, "vol_trend": vol_trend, "mom_5": mom_5,
+        "high_50": max(recent_h), "low_50": min(recent_l),
+    }
+
+
+def _loma_analysis_text(sym, summaries, raw_dfs):
+    if not summaries or not raw_dfs:
+        return f"No data loaded for {sym}. Run a forecast first."
+
+    pref = ["4h","1h","1d","15m","30m","5m","1m"]
+    main_tf = next((t for t in pref if t in raw_dfs), list(raw_dfs.keys())[0])
+    t = _compute_technicals(raw_dfs[main_tf])
+    price, rsi, sup, res, atr = t["price"], t["rsi"], t["support"], t["resistance"], t["atr"]
+
+    if t["ema9"] > t["ema21"] > t["ema50"]:
+        ema_read = "EMAs stacked bullish (9 > 21 > 50)"
+    elif t["ema9"] < t["ema21"] < t["ema50"]:
+        ema_read = "EMAs stacked bearish (9 < 21 < 50)"
+    elif t["ema9"] > t["ema21"]:
+        ema_read = "short-term momentum turning up (9 > 21, below 50)"
+    else:
+        ema_read = "short-term momentum fading (9 < 21)"
+
+    if rsi >= 70:   rsi_read = f"RSI {rsi:.0f} — overbought, watch for exhaustion"
+    elif rsi <= 30: rsi_read = f"RSI {rsi:.0f} — oversold, potential bounce zone"
+    elif rsi >= 55: rsi_read = f"RSI {rsi:.0f} — bullish momentum, room to run"
+    elif rsi <= 45: rsi_read = f"RSI {rsi:.0f} — bearish pressure, sellers in control"
+    else:           rsi_read = f"RSI {rsi:.0f} — neutral, consolidating"
+
+    bullish_tfs = [tf for tf,s in summaries.items() if s["end"] >= s["last"]]
+    bearish_tfs = [tf for tf,s in summaries.items() if s["end"] <  s["last"]]
+    bull_n, total = len(bullish_tfs), len(summaries)
+
+    if bull_n == total:
+        confluence = f"Full bull confluence — all {total} TFs ({', '.join(bullish_tfs)}) pointing higher"
+        bias = "LONG"
+    elif bull_n == 0:
+        confluence = f"Full bear confluence — all {total} TFs ({', '.join(bearish_tfs)}) pointing lower"
+        bias = "SHORT"
+    elif bull_n > total / 2:
+        confluence = f"Bull majority — {', '.join(bullish_tfs)} bullish, {', '.join(bearish_tfs)} lagging"
+        bias = "LONG-LEANING"
+    else:
+        confluence = f"Bear majority — {', '.join(bearish_tfs)} bearish, {', '.join(bullish_tfs)} holding"
+        bias = "SHORT-LEANING"
+
+    main_s = summaries.get(main_tf, list(summaries.values())[0])
+    target = main_s["end"]
+    fc_pct = (target - price) / price * 100
+
+    if "LONG" in bias:
+        trade_note = (f"Long entry zone: **${sup:.4f}–${sup*1.002:.4f}**, stop **${sup*0.992:.4f}**, "
+                      f"TP1 **${res:.4f}**, TP2 **${res*1.015:.4f}**.")
+    else:
+        trade_note = (f"Short entry zone: **${res:.4f}–${res*0.998:.4f}**, stop **${res*1.008:.4f}**, "
+                      f"TP1 **${sup:.4f}**, TP2 **${sup*0.985:.4f}**.")
+
+    if rsi >= 68:   risk = "Overbought RSI — don't chase longs here."
+    elif rsi <= 32: risk = "Oversold RSI — size down on shorts."
+    elif t["vol_trend"] == "flat/falling" and "LONG" in bias:
+        risk = "Volume not confirming the move — wait for a vol surge entry."
+    else:
+        risk = f"Keep stops at least 1× ATR (${atr:.4f}) from entry."
+
+    return (
+        f"**{sym} — {main_tf.upper()} Analysis**\n\n"
+        f"Price: **${price:,.4f}** | Bias: **{bias}**\n\n"
+        f"**Structure:** {ema_read}. {rsi_read}. Volume {t['vol_trend']}.\n\n"
+        f"**Key Levels:** Support **${sup:,.4f}** · Resistance **${res:,.4f}** · "
+        f"50-bar range ${t['low_50']:,.4f}–${t['high_50']:,.4f}\n\n"
+        f"**Forecast ({main_tf}):** ${price:,.4f} → **${target:,.4f}** ({fc_pct:+.2f}%)\n\n"
+        f"**Multi-TF:** {confluence}\n\n"
+        f"**Trade:** {trade_note}\n\n"
+        f"**Risk:** {risk}"
+    )
+
+
+def _loma_chat_reply(question, sym, summaries, raw_dfs, history):
+    q = question.lower().strip()
+    pref = ["4h","1h","1d","15m","30m","5m","1m"]
+    main_tf = next((tf for tf in pref if tf in raw_dfs), list(raw_dfs.keys())[0] if raw_dfs else None)
+    t = _compute_technicals(raw_dfs[main_tf]) if main_tf and raw_dfs else None
+    price = t["price"] if t else None
+
+    if any(w in q for w in ["support","sup","floor","bottom","demand"]):
+        if t:
+            return (f"Primary support on {main_tf.upper()} at **${t['support']:,.4f}**. "
+                    f"Hard floor at **${t['low_50']:,.4f}** (50-bar low). "
+                    f"RSI {t['rsi']:.0f} — {'solid bounce zone' if t['rsi'] < 45 else 'sellers still in control, wait for confirmation before buying dips'}.")
+        return "Run a forecast first so I have live levels."
+
+    if any(w in q for w in ["resistance","res","ceiling","top","supply"]):
+        if t:
+            main_s = summaries.get(main_tf, list(summaries.values())[0]) if summaries else None
+            fc_str = f" Forecast target **${main_s['end']:,.4f}**." if main_s else ""
+            return (f"Nearest resistance **${t['resistance']:,.4f}**. "
+                    f"50-bar high **${t['high_50']:,.4f}** is the real ceiling.{fc_str} "
+                    f"RSI {t['rsi']:.0f} — {'momentum could carry through on volume' if t['rsi'] > 50 else 'resistance likely holds on first touch'}.")
+        return "Run a forecast first."
+
+    if any(w in q for w in ["trend","direction","bull","bear","up or down","going"]):
+        if t and summaries:
+            bull_n = sum(1 for s in summaries.values() if s["end"] >= s["last"])
+            bias = "BULLISH" if bull_n > len(summaries)/2 else "BEARISH" if bull_n < len(summaries)/2 else "MIXED"
+            ema_dir = "bullish" if t["ema9"] > t["ema21"] else "bearish"
+            return (f"Trend on {sym}: **{bias}** — {bull_n}/{len(summaries)} TFs pointing up. "
+                    f"EMA stack is {ema_dir} on {main_tf.upper()} "
+                    f"(9-EMA ${t['ema9']:,.4f} vs 21-EMA ${t['ema21']:,.4f}). "
+                    f"RSI {t['rsi']:.0f}. Volume {t['vol_trend']}.")
+        return "Load a forecast first for a live trend read."
+
+    if any(w in q for w in ["rsi","momentum","overbought","oversold"]):
+        if t:
+            if t["rsi"] >= 70:   return f"RSI **{t['rsi']:.0f}** — overbought. Don't chase longs. Wait for pullback to 50–55 RSI before entering. Reversal risk is elevated."
+            elif t["rsi"] <= 30: return f"RSI **{t['rsi']:.0f}** — oversold. Potential bounce zone, but oversold can stay oversold. Wait for a bullish close before buying."
+            elif t["rsi"] >= 55: return f"RSI **{t['rsi']:.0f}** — bullish territory. Momentum with the bulls. Room to run before getting crowded."
+            else:                return f"RSI **{t['rsi']:.0f}** — neutral/bearish. Sellers have the slight edge. No screaming setup either way."
+        return "Run a forecast for live RSI data."
+
+    if any(w in q for w in ["entry","buy","long","enter","get in"]):
+        if t and summaries:
+            bull_n = sum(1 for s in summaries.values() if s["end"] >= s["last"])
+            if bull_n >= len(summaries)/2:
+                return (f"Long entry zone: **${t['support']:,.4f}–${t['support']*1.002:,.4f}**. "
+                        f"Stop under **${t['support']*0.992:,.4f}**. "
+                        f"TP1 **${t['resistance']:,.4f}**, TP2 **${t['resistance']*1.015:,.4f}**. "
+                        f"{'RSI ' + str(round(t['rsi'])) + ' — clean setup.' if t['rsi'] < 65 else 'RSI ' + str(round(t['rsi'])) + ' is elevated — wait for a pullback before entering.'}")
+            else:
+                return (f"Bias is bearish — not a high-conviction long. "
+                        f"Only buy if price reclaims **${t['resistance']:,.4f}** on a close. Otherwise wait for trend alignment.")
+        return "Run a forecast first for live entry levels."
+
+    if any(w in q for w in ["stop","stop loss","sl","risk","invalidation"]):
+        if t:
+            return (f"Longs: stop below **${t['support']*0.992:,.4f}** (~0.8% under support). "
+                    f"Shorts: stop above **${t['resistance']*1.008:,.4f}**. "
+                    f"ATR on {main_tf.upper()} is **${t['atr']:,.4f}** — always keep stops at least 1× ATR from entry.")
+        return "Load a forecast for live stop levels."
+
+    if any(w in q for w in ["short","sell","fade","bear trade"]):
+        if t and summaries:
+            bull_n = sum(1 for s in summaries.values() if s["end"] >= s["last"])
+            if bull_n <= len(summaries)/2:
+                return (f"Short entry: **${t['resistance']:,.4f}–${t['resistance']*0.998:,.4f}** on resistance rejection. "
+                        f"Stop above **${t['resistance']*1.008:,.4f}**. "
+                        f"TP1 **${t['support']:,.4f}**, TP2 **${t['support']*0.985:,.4f}**.")
+            else:
+                return (f"Bias is bullish — shorting here is low-conviction. "
+                        f"Only short on a confirmed break below **${t['support']:,.4f}** with volume. Otherwise risk/reward is poor.")
+        return "Run a forecast for live short levels."
+
+    if any(w in q for w in ["forecast","predict","target","where is it going"]):
+        if summaries:
+            lines = [f"**{sym} Forecast:**"]
+            for tf, s in summaries.items():
+                pct = (s["end"] - s["last"]) / max(s["last"], 0.0001) * 100
+                lines.append(f"• {tf.upper()}: ${s['last']:,.4f} → **${s['end']:,.4f}** ({'▲' if pct>=0 else '▼'}{abs(pct):.2f}%)")
+            return "\n".join(lines)
+        return "Run a forecast first to get price targets."
+
+    if any(w in q for w in ["price","current","how much","what is","trading at"]):
+        if price and summaries:
+            main_s = summaries.get(main_tf, list(summaries.values())[0])
+            fc_pct = (main_s["end"] - price) / price * 100
+            return (f"{sym} is at **${price:,.4f}**. "
+                    f"Forecast ({main_tf.upper()}): **${main_s['end']:,.4f}** ({fc_pct:+.2f}%). "
+                    f"Support **${t['support']:,.4f}** · Resistance **${t['resistance']:,.4f}**.")
+        return f"Run a forecast to get the latest {sym} price."
+
+    if any(w in q for w in ["trap","bull trap","bear trap","fake","fakeout"]):
+        if t:
+            if t["rsi"] > 65:
+                return (f"Bull trap watch at **${t['resistance']:,.4f}**. RSI {t['rsi']:.0f} elevated — "
+                        f"if price spikes through resistance without volume follow-through, that's the trap. Wait for a 4H close above before calling breakout.")
+            elif t["rsi"] < 35:
+                return (f"Bear trap risk below **${t['support']:,.4f}**. RSI {t['rsi']:.0f} oversold — "
+                        f"shakeout below support then fast reclaim is the classic setup. If you're short and price doesn't follow through in 1–2 bars, cover.")
+            else:
+                return (f"No obvious trap setup right now. Price mid-range between support **${t['support']:,.4f}** and resistance **${t['resistance']:,.4f}**. Wait for cleaner setups at the edges.")
+        return "Run a forecast for a live trap read."
+
+    # default — full snapshot
+    if t and summaries:
+        return _loma_analysis_text(sym, summaries, raw_dfs)
+    return f"Run a forecast on {sym} and I'll give you a full read — entries, targets, support/resistance, and trend direction."
+
+
+def _fallback_analysis(sym, summaries, raw_dfs=None):
+    if raw_dfs:
+        return _loma_analysis_text(sym, summaries, raw_dfs)
+    if not summaries:
+        return f"No data loaded for {sym}. Run a forecast first."
+    lines = [f"**{sym} — LOMA Read**\n"]
     for tf, s in summaries.items():
         pct = (s["end"] - s["last"]) / max(s["last"], 0.0001) * 100
-        direction = "▲ BULLISH" if pct >= 0 else "▼ BEARISH"
-        if pct >= 0:
-            bullish_count += 1
-        lines.append(f"• **{tf}**: {direction} | Current ${s['last']:,.4f} → Target ${s['end']:,.4f} ({pct:+.2f}%)")
-
-    total = len(summaries)
-    if bullish_count > total / 2:
-        bias = "BULLISH"
-        call = "Look for long entries on pullbacks toward nearest support."
-    elif bullish_count < total / 2:
-        bias = "BEARISH"
-        call = "Short bias. Watch for dead-cat bounces as sell opportunities."
-    else:
-        bias = "NEUTRAL/MIXED"
-        call = "Wait for timeframe alignment before committing to a direction."
-
-    lines.append(f"\n**Multi-TF Bias: {bias}** ({bullish_count}/{total} TFs bullish)")
-    lines.append(f"\n**Trade Call:** {call}")
-    lines.append("\n*Note: AI chat unavailable — update API keys in the script for full conversational analysis.*")
+        lines.append(f"• {tf.upper()}: ${s['last']:,.4f} → **${s['end']:,.4f}** ({pct:+.2f}%)")
     return "\n".join(lines)
 
-def luma_call(messages):
-    """Try all providers in order, fall back to rule-based analysis."""
-    # Try OpenRouter
+
+def luma_call(messages, sym=None, summaries=None, raw_dfs=None, question=None, history=None):
+    """Try AI providers first, fall back to built-in technical analysis engine."""
     try:
         return _openrouter_call(messages)
-    except Exception as or_err:
+    except Exception:
         pass
-
-    # Try HuggingFace
     try:
         return _hf_inference_call(messages)
     except Exception:
         pass
-
-    # Try local Ollama
     try:
         return _ollama_local_call(messages)
     except Exception:
         pass
-
-    # Rule-based fallback — extract context from last user message
-    last_msg = messages[-1]["content"] if messages else ""
-    return (
-        "**LOMA Analysis** *(AI service temporarily unavailable — API keys need refresh)*\n\n"
-        "To restore full AI chat:\n"
-        "1. Get a free key at **openrouter.ai** and update `OPENROUTER_KEY` in the script\n"
-        "2. Or get a free token at **huggingface.co** and update `HF_KEY`\n\n"
-        "Chart data and forecasts are still fully functional. All indicators and price targets above are live."
-    )
+    # Built-in engine — always works
+    if question and sym and (summaries or raw_dfs):
+        return _loma_chat_reply(question, sym, summaries or {}, raw_dfs or {}, history or [])
+    if sym and summaries and raw_dfs:
+        return _loma_analysis_text(sym, summaries, raw_dfs)
+    return _fallback_analysis(sym or "Unknown", summaries or {}, raw_dfs)
 
 def market_ctx(sym, summaries, raw_dfs):
     lines = [f"LIVE MARKET DATA — {sym}\n"]
@@ -399,14 +617,13 @@ def market_ctx(sym, summaries, raw_dfs):
 
 def do_analysis(sym, summaries, raw_dfs):
     if not summaries:
-        return _fallback_analysis(sym, summaries)
+        return _fallback_analysis(sym, summaries, raw_dfs)
     ctx = market_ctx(sym, summaries, raw_dfs)
-    result = luma_call([{"role":"user","content":
-        f"{ctx}\n\nDeliver your LOMA analysis: trend direction, key levels, "
-        f"multi-TF confluence, highest-conviction call, and key risk. Specific price levels."}])
-    # If AI unavailable, fall back to rule-based
-    if "API keys need refresh" in result or "temporarily unavailable" in result:
-        return _fallback_analysis(sym, summaries) + "\n\n---\n" + result
+    result = luma_call(
+        [{"role":"user","content":
+          f"{ctx}\n\nDeliver your LOMA analysis: trend direction, key levels, "
+          f"multi-TF confluence, highest-conviction call, and key risk. Specific price levels."}],
+        sym=sym, summaries=summaries, raw_dfs=raw_dfs)
     return result
 
 def do_chat(sym, summaries, raw_dfs, question, history):
@@ -417,7 +634,8 @@ def do_chat(sym, summaries, raw_dfs, question, history):
         msgs += [{"role":"user","content":h["user"]},
                  {"role":"assistant","content":h["luma"]}]
     msgs.append({"role":"user","content":question})
-    return luma_call(msgs)
+    return luma_call(msgs, sym=sym, summaries=summaries, raw_dfs=raw_dfs,
+                     question=question, history=history)
 
 def analyze_image(filename, note=""):
     prompt = (f"A trader uploaded chart: '{filename}'. {('Note: '+note) if note else ''} "
