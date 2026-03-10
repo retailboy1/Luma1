@@ -1141,199 +1141,241 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
   </div>
 </div>
 
-<!-- LIQUIDATION HEATMAP -->
+<!-- FAKE LIVE METRICS BAR: OI + Funding Rate -->
+<div id="live-metrics-bar" style="
+  display:grid;grid-template-columns:repeat(6,1fr);gap:1px;
+  background:#0d1020;border:1px solid #111827;border-radius:6px;
+  margin-bottom:14px;overflow:hidden">
+  <div class="lm-cell"><div class="lm-l">OPEN INTEREST</div><div class="lm-v" id="lm-oi" style="color:#a78bfa">$2.84B</div></div>
+  <div class="lm-cell"><div class="lm-l">OI CHANGE 1H</div><div class="lm-v" id="lm-oi-chg" style="color:#34d399">+1.2%</div></div>
+  <div class="lm-cell"><div class="lm-l">FUNDING RATE</div><div class="lm-v" id="lm-fund" style="color:#fbbf24">0.0082%</div></div>
+  <div class="lm-cell"><div class="lm-l">LONG RATIO</div><div class="lm-v" id="lm-long" style="color:#34d399">52.3%</div></div>
+  <div class="lm-cell"><div class="lm-l">SHORT RATIO</div><div class="lm-v" id="lm-short" style="color:#f87171">47.7%</div></div>
+  <div class="lm-cell"><div class="lm-l">LIQUIDATIONS 1H</div><div class="lm-v" id="lm-liq" style="color:#f87171">$4.1M</div></div>
+</div>
+
+<style>
+.lm-cell{{background:#070a12;padding:10px 14px}}
+.lm-l{{color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.09em;margin-bottom:4px}}
+.lm-v{{font-family:'IBM Plex Mono',monospace;font-size:.9rem;font-weight:700;transition:color .3s}}
+
+/* zoomable image wrapper */
+.zoom-wrap{{
+  position:relative;overflow:hidden;cursor:zoom-in;
+  background:#070a12;border:1px solid #111827;border-radius:8px;
+  user-select:none;
+}}
+.zoom-wrap img{{
+  width:100%;display:block;transition:transform .15s ease;
+  transform-origin:0 0;pointer-events:none;
+}}
+.zoom-wrap .zoom-hint{{
+  position:absolute;bottom:6px;right:10px;
+  color:rgba(255,255,255,.25);font-size:.6rem;font-family:'IBM Plex Mono',monospace;
+  letter-spacing:.08em;pointer-events:none
+}}
+.zoom-wrap .zoom-reset{{
+  position:absolute;top:8px;right:10px;
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);
+  color:rgba(255,255,255,.5);font-size:.6rem;font-family:'IBM Plex Mono',monospace;
+  padding:3px 8px;border-radius:3px;cursor:pointer;letter-spacing:.06em;
+  opacity:0;transition:opacity .2s
+}}
+.zoom-wrap:hover .zoom-reset{{opacity:1}}
+</style>
+
+<!-- LIQUIDATION HEATMAP IMAGE -->
 <div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:10px">🔥 LIQUIDATION HEATMAP</div>
-  <div style="background:#070a12;border:1px solid #111827;border-radius:8px;overflow:hidden;position:relative">
-    <canvas id="liq-heatmap-canvas" style="width:100%;display:block" height="180"></canvas>
-    <div style="position:absolute;top:8px;left:12px;display:flex;flex-direction:column;gap:3px">
-      <div style="background:linear-gradient(180deg,#ffff00,#00ff88,#00aaff,#220066);
-        width:10px;height:80px;border-radius:2px;border:1px solid rgba(255,255,255,.1)"></div>
-      <div style="color:#374151;font-size:.56rem;font-family:'IBM Plex Mono',monospace;margin-top:2px">HIGH</div>
-      <div style="color:#374151;font-size:.56rem;font-family:'IBM Plex Mono',monospace;margin-top:50px">LOW</div>
-    </div>
-    <div style="position:absolute;top:8px;right:10px;color:#1e293b;font-size:.6rem;
-      font-family:'IBM Plex Mono',monospace;letter-spacing:.08em">SIMULATED · ILLUSTRATIVE</div>
+  <div class="ap-sh2" style="margin-bottom:8px">🔥 LIQUIDATION HEATMAP &nbsp;<span style="color:#1e293b;font-size:.56rem;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN</span></div>
+  <div class="zoom-wrap" id="zw-heatmap" style="height:280px">
+    <img src="https://app.cdnblock.com/upload/1713366001994-2.png" id="img-heatmap"
+         alt="Liquidation Heatmap"
+         style="width:100%;height:100%;object-fit:cover;pointer-events:none"
+         onerror="this.src='https://coinglass.com/public/imgs/heatmap-placeholder.png'"/>
+    <div class="zoom-hint">SCROLL TO ZOOM · DRAG TO PAN</div>
+    <button class="zoom-reset" onclick="resetZoom('zw-heatmap')">RESET</button>
   </div>
 </div>
 
-<!-- FOOTPRINT CHART -->
+<!-- FOOTPRINT IMAGE -->
 <div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:10px">📊 ORDER FLOW FOOTPRINT</div>
-  <div style="background:#070a12;border:1px solid #111827;border-radius:8px;overflow:hidden">
-    <canvas id="footprint-canvas" style="width:100%;display:block" height="160"></canvas>
+  <div class="ap-sh2" style="margin-bottom:8px">📊 ORDER FLOW FOOTPRINT &nbsp;<span style="color:#1e293b;font-size:.56rem;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN</span></div>
+  <div class="zoom-wrap" id="zw-footprint" style="height:300px">
+    <img src="https://i.redd.it/33gffe66fwf61.png" id="img-footprint"
+         alt="Order Flow Footprint"
+         style="width:100%;height:100%;object-fit:cover;pointer-events:none"/>
+    <div class="zoom-hint">SCROLL TO ZOOM · DRAG TO PAN</div>
+    <button class="zoom-reset" onclick="resetZoom('zw-footprint')">RESET</button>
+  </div>
+</div>
+
+<!-- BOOKMAP IMAGE -->
+<div style="margin-bottom:14px">
+  <div class="ap-sh2" style="margin-bottom:8px">📖 LIVE BOOK MAP &nbsp;<span style="color:#1e293b;font-size:.56rem;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN</span></div>
+  <div class="zoom-wrap" id="zw-bookmap" style="height:280px">
+    <img src="https://optimusfutures.com/img/Bookmap/Bookmap-1.jpg" id="img-bookmap"
+         alt="Bookmap Order Flow"
+         style="width:100%;height:100%;object-fit:cover;pointer-events:none"/>
+    <div class="zoom-hint">SCROLL TO ZOOM · DRAG TO PAN</div>
+    <button class="zoom-reset" onclick="resetZoom('zw-bookmap')">RESET</button>
   </div>
 </div>
 
 </div>
 
 <script>
-// ── LIQUIDATION HEATMAP ───────────────────────────────────────────────
+// ── ZOOM + PAN for all images ─────────────────────────────────────────
 (function() {{
-  function drawHeatmap() {{
-    var canvas = document.getElementById('liq-heatmap-canvas');
-    if (!canvas) return;
-    canvas.width = canvas.offsetWidth || 800;
-    var ctx = canvas.getContext('2d');
-    var W = canvas.width, H = canvas.height;
-    ctx.fillStyle = '#070a12';
-    ctx.fillRect(0,0,W,H);
+  var wrapIds = ['zw-heatmap','zw-footprint','zw-bookmap'];
 
-    var price = {price:.2f};
-    var sup   = {t['support']:.2f};
-    var res   = {t['resistance']:.2f};
-    var rng   = (res - sup) * 1.6;
-    var lo    = price - rng * 0.55;
-    var hi    = lo + rng;
+  function initZoom(wrapId) {{
+    var wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    var img = wrap.querySelector('img');
+    var scale = 1, minScale = 1, maxScale = 6;
+    var tx = 0, ty = 0;
+    var dragging = false, startX, startY, startTx, startTy;
 
-    function pxY(p) {{ return H - ((p - lo) / (hi - lo)) * H; }}
+    function clamp(v, lo, hi) {{ return Math.max(lo, Math.min(hi, v)); }}
 
-    // Draw horizontal liquidity bars
-    var bars = 28;
-    for (var i = 0; i < bars; i++) {{
-      var bar_price = lo + (hi - lo) * i / bars + (hi-lo)/(bars*2);
-      var dist = Math.abs(bar_price - price) / rng;
-
-      // Intensity spikes near support/resistance and current price
-      var nearSup = Math.abs(bar_price - sup) / rng;
-      var nearRes = Math.abs(bar_price - res) / rng;
-      var intensity = Math.max(
-        0.1,
-        0.9 * Math.exp(-nearSup * 35) + 0.8 * Math.exp(-nearRes * 35) + 0.15 * Math.exp(-dist * 8) + Math.random() * 0.1
-      );
-
-      var r, g, b;
-      if (intensity > 0.7) {{ r=255; g=220; b=0; }}
-      else if (intensity > 0.45) {{ r=0; g=220; b=80; }}
-      else if (intensity > 0.25) {{ r=0; g=150; b=220; }}
-      else {{ r=30; g=40; b=120; }}
-
-      var barLen = (0.3 + intensity * 0.65) * (W - 100);
-      var y = pxY(bar_price);
-      var barH = Math.max(3, H / bars - 2);
-
-      ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (0.35 + intensity * 0.6) + ')';
-      ctx.fillRect(28, y - barH/2, barLen, barH);
+    function apply() {{
+      var maxTx = wrap.clientWidth  * (scale - 1);
+      var maxTy = wrap.clientHeight * (scale - 1);
+      tx = clamp(tx, -maxTx, 0);
+      ty = clamp(ty, -maxTy, 0);
+      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+      img.style.transformOrigin = '0 0';
+      wrap.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
     }}
 
-    // Price line
-    ctx.strokeStyle = 'rgba(255,255,255,.7)';
-    ctx.setLineDash([4,3]);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    var py = pxY(price);
-    ctx.moveTo(28, py); ctx.lineTo(W, py);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    wrap.addEventListener('wheel', function(e) {{
+      e.preventDefault();
+      var rect = wrap.getBoundingClientRect();
+      var mx = e.clientX - rect.left;
+      var my = e.clientY - rect.top;
+      var delta = e.deltaY < 0 ? 1.12 : 0.89;
+      var newScale = clamp(scale * delta, minScale, maxScale);
+      tx = mx - (mx - tx) * newScale / scale;
+      ty = my - (my - ty) * newScale / scale;
+      scale = newScale;
+      apply();
+    }}, {{passive:false}});
 
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 10px IBM Plex Mono, monospace';
-    ctx.fillText('$' + price.toFixed(0), W - 68, py - 4);
+    wrap.addEventListener('mousedown', function(e) {{
+      if (scale <= 1) return;
+      dragging = true; startX = e.clientX; startY = e.clientY;
+      startTx = tx; startTy = ty;
+      wrap.style.cursor = 'grabbing';
+      e.preventDefault();
+    }});
+    document.addEventListener('mousemove', function(e) {{
+      if (!dragging) return;
+      tx = startTx + (e.clientX - startX);
+      ty = startTy + (e.clientY - startY);
+      apply();
+    }});
+    document.addEventListener('mouseup', function() {{
+      dragging = false; apply();
+    }});
 
-    // Support / Resistance labels
-    ctx.fillStyle = '#34d399';
-    ctx.font = '9px IBM Plex Mono, monospace';
-    ctx.fillText('SUP $' + sup.toFixed(0), W - 68, pxY(sup) - 3);
-
-    ctx.fillStyle = '#f87171';
-    ctx.fillText('RES $' + res.toFixed(0), W - 68, pxY(res) - 3);
-  }}
-
-  setTimeout(drawHeatmap, 200);
-  window.addEventListener('resize', function() {{ setTimeout(drawHeatmap, 100); }});
-}})();
-
-// ── FOOTPRINT CHART ───────────────────────────────────────────────────
-(function() {{
-  function drawFootprint() {{
-    var canvas = document.getElementById('footprint-canvas');
-    if (!canvas) return;
-    canvas.width = canvas.offsetWidth || 800;
-    var ctx = canvas.getContext('2d');
-    var W = canvas.width, H = canvas.height;
-    ctx.fillStyle = '#070a12';
-    ctx.fillRect(0,0,W,H);
-
-    var bars = 12;
-    var barW = (W - 60) / bars;
-    var price = {price:.2f};
-    var atr   = {t['atr']:.2f};
-
-    for (var i = 0; i < bars; i++) {{
-      var x = 30 + i * barW;
-      var barBias = Math.sin(i * 1.3 + 0.7) * 0.5 + 0.5 + (Math.random() - 0.5) * 0.3;
-
-      // candle body
-      var candleH = 8 + Math.random() * 50;
-      var candleY = 20 + Math.random() * (H - 80 - candleH);
-      var isBull = barBias > 0.5;
-      ctx.fillStyle = isBull ? 'rgba(52,211,153,.22)' : 'rgba(248,113,113,.18)';
-      ctx.strokeStyle = isBull ? '#34d399' : '#f87171';
-      ctx.lineWidth = 1;
-      ctx.fillRect(x + 2, candleY, barW - 6, candleH);
-      ctx.strokeRect(x + 2, candleY, barW - 6, candleH);
-
-      // wick
-      ctx.strokeStyle = isBull ? 'rgba(52,211,153,.5)' : 'rgba(248,113,113,.5)';
-      ctx.beginPath();
-      ctx.moveTo(x + barW/2, candleY - 5);
-      ctx.lineTo(x + barW/2, candleY);
-      ctx.moveTo(x + barW/2, candleY + candleH);
-      ctx.lineTo(x + barW/2, candleY + candleH + 6);
-      ctx.stroke();
-
-      // bid/ask volume inside bars
-      var levels = 4;
-      for (var l = 0; l < levels; l++) {{
-        var ly = candleY + (l / levels) * candleH + 3;
-        var bidVol = Math.floor(Math.random() * 120 + 10);
-        var askVol = Math.floor(Math.random() * 120 + 10);
-        var isImbalance = bidVol > askVol * 2 || askVol > bidVol * 2;
-
-        ctx.font = '6px IBM Plex Mono, monospace';
-        ctx.fillStyle = isImbalance ? (bidVol > askVol ? '#34d399' : '#f87171') : 'rgba(100,116,139,.7)';
-        if (barW > 48) {{
-          ctx.fillText(bidVol + 'x' + askVol, x + 4, ly);
-        }}
+    // double-click zoom
+    wrap.addEventListener('dblclick', function(e) {{
+      var rect = wrap.getBoundingClientRect();
+      var mx = e.clientX - rect.left;
+      var my = e.clientY - rect.top;
+      if (scale < 2.5) {{
+        var ns = clamp(scale * 2.2, minScale, maxScale);
+        tx = mx - (mx - tx) * ns / scale;
+        ty = my - (my - ty) * ns / scale;
+        scale = ns;
+      }} else {{
+        scale = 1; tx = 0; ty = 0;
       }}
-    }}
+      apply();
+    }});
 
-    // Delta bar at bottom
-    ctx.fillStyle = '#0d1225';
-    ctx.fillRect(0, H - 22, W, 22);
-    ctx.fillStyle = '#1e293b';
-    ctx.font = '8px IBM Plex Mono, monospace';
-    ctx.fillText('DELTA', 4, H - 8);
-    for (var j = 0; j < bars; j++) {{
-      var delta = (Math.random() - 0.5) * 800;
-      var dCol = delta > 0 ? 'rgba(52,211,153,.8)' : 'rgba(248,113,113,.8)';
-      ctx.fillStyle = dCol;
-      ctx.fillText((delta > 0 ? '+' : '') + Math.round(delta), 34 + j * barW, H - 8);
-    }}
+    wrap._resetZoom = function() {{ scale = 1; tx = 0; ty = 0; apply(); }};
   }}
 
-  setTimeout(drawFootprint, 300);
-  window.addEventListener('resize', function() {{ setTimeout(drawFootprint, 100); }});
+  wrapIds.forEach(initZoom);
+
+  window.resetZoom = function(id) {{
+    var w = document.getElementById(id);
+    if (w && w._resetZoom) w._resetZoom();
+  }};
 }})();
 
-// Enter-to-submit for chat inputs
+// ── FAKE LIVE OI / FUNDING RATE ──────────────────────────────────────
+(function() {{
+  var oi     = 2840000000;
+  var oiChg  = 1.2;
+  var fund   = 0.0082;
+  var longR  = 52.3;
+  var liq1h  = 4100000;
+
+  function fmtB(n) {{
+    if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+    return '$' + (n/1e6).toFixed(0) + 'M';
+  }}
+  function fmtM(n) {{
+    if (n >= 1e6) return '$' + (n/1e6).toFixed(1) + 'M';
+    return '$' + (n/1e3).toFixed(0) + 'K';
+  }}
+  function el(id) {{
+    try {{ return window.top.document.getElementById(id)||document.getElementById(id); }} catch(e) {{ return document.getElementById(id); }}
+  }}
+  function setColor(elem, val, posCol, negCol) {{
+    if (!elem) return;
+    elem.style.color = val >= 0 ? posCol : negCol;
+    elem.style.textShadow = '0 0 8px ' + (val >= 0 ? posCol : negCol) + '55';
+  }}
+
+  function tick() {{
+    oi    += (Math.random()-0.47)*8000000;
+    oiChg += (Math.random()-0.5)*0.08;
+    fund  += (Math.random()-0.5)*0.0003;
+    longR += (Math.random()-0.5)*0.15;
+    liq1h += (Math.random()-0.45)*50000;
+
+    oiChg = Math.max(-5, Math.min(5, oiChg));
+    fund  = Math.max(-0.05, Math.min(0.05, fund));
+    longR = Math.max(35, Math.min(65, longR));
+    liq1h = Math.max(500000, liq1h);
+    var shortR = 100 - longR;
+
+    var oiEl   = el('lm-oi');
+    var oicEl  = el('lm-oi-chg');
+    var fundEl = el('lm-fund');
+    var longEl = el('lm-long');
+    var shrtEl = el('lm-short');
+    var liqEl  = el('lm-liq');
+
+    if (oiEl)   oiEl.textContent   = fmtB(oi);
+    if (oicEl)  {{ oicEl.textContent = (oiChg>=0?'+':'')+oiChg.toFixed(2)+'%'; setColor(oicEl, oiChg,'#34d399','#f87171'); }}
+    if (fundEl) {{ fundEl.textContent = fund.toFixed(4)+'%'; setColor(fundEl, fund,'#fbbf24','#f87171'); fundEl.style.color = Math.abs(fund)<0.005?'#fbbf24':fund>0?'#f87171':'#34d399'; }}
+    if (longEl) {{ longEl.textContent = longR.toFixed(1)+'%'; setColor(longEl, longR-50,'#34d399','#f87171'); }}
+    if (shrtEl) {{ shrtEl.textContent = shortR.toFixed(1)+'%'; setColor(shrtEl, -(shortR-50),'#34d399','#f87171'); }}
+    if (liqEl)  liqEl.textContent  = fmtM(liq1h);
+  }}
+
+  setInterval(tick, 1200);
+}})();
+
+// ── ENTER-TO-SUBMIT ───────────────────────────────────────────────────
 (function() {{
   function hookEnterKeys() {{
     function attachToDoc(doc) {{
       doc.addEventListener('keydown', function(e) {{
         if (e.key !== 'Enter' || e.shiftKey) return;
         var active = doc.activeElement;
-        if (!active) return;
-        if (active.tagName !== 'INPUT') return;
+        if (!active || active.tagName !== 'INPUT') return;
         var el = active;
         for (var i = 0; i < 10 && el; i++) {{
           var btns = el.querySelectorAll ? el.querySelectorAll('button') : [];
           for (var j = 0; j < btns.length; j++) {{
             var txt = btns[j].textContent.trim().toLowerCase();
-            if (txt.includes('ask') || txt.includes('→') || txt.includes('send') || txt.includes('continue') || txt.includes('sign in')) {{
-              e.preventDefault();
-              btns[j].click();
-              return;
+            if (txt.includes('ask')||txt.includes('→')||txt.includes('send')||txt.includes('continue')||txt.includes('sign in')) {{
+              e.preventDefault(); btns[j].click(); return;
             }}
           }}
           el = el.parentElement;
@@ -1414,18 +1456,39 @@ function setUI(state) {{
 
 function pickVoice() {{
   var voices = synth.getVoices();
-  // Priority: Samantha (macOS), Karen (AU), Moira (IE), any female US, then any EN
-  return (
-    voices.find(v => v.name === 'Samantha') ||
-    voices.find(v => v.name === 'Karen') ||
-    voices.find(v => v.name === 'Moira') ||
-    voices.find(v => v.name === 'Fiona') ||
-    voices.find(v => v.name === 'Tessa') ||
-    voices.find(v => v.name.includes('female') || v.name.includes('Female')) ||
-    voices.find(v => v.lang === 'en-US' && v.localService) ||
-    voices.find(v => v.lang && v.lang.startsWith('en-')) ||
-    voices[0]
-  );
+  if (!voices || !voices.length) return null;
+
+  // Explicitly female voices by exact name (most common across OS/browser)
+  var femaleNames = [
+    'Samantha','Karen','Moira','Fiona','Tessa','Veena','Nicky',
+    'Allison','Ava','Susan','Victoria','Zoe','Zira','Linda',
+    'Google US English','Google UK English Female',
+    'Microsoft Zira','Microsoft Eva','Microsoft Linda',
+    'en-US-AriaNeural','Aria','Jenny','Emma','Michelle'
+  ];
+  for (var i = 0; i < femaleNames.length; i++) {{
+    var v = voices.find(function(vv) {{ return vv.name === femaleNames[i]; }});
+    if (v) return v;
+  }}
+  // Partial match on female-indicating keywords
+  var femaleKw = ['female','woman','girl','aria','zira','ava','emma','jenny','samantha','karen'];
+  for (var k = 0; k < femaleKw.length; k++) {{
+    var v2 = voices.find(function(vv) {{ return vv.name.toLowerCase().indexOf(femaleKw[k]) >= 0; }});
+    if (v2) return v2;
+  }}
+  // Avoid known male voices
+  var maleNames = ['Alex','Tom','Daniel','Fred','Ralph','Bruce','Junior','Albert',
+    'Microsoft David','Microsoft Mark','Google UK English Male'];
+  var filtered = voices.filter(function(vv) {{
+    var n = vv.name.toLowerCase();
+    return maleNames.every(function(m) {{ return vv.name !== m && n.indexOf('male') < 0; }});
+  }});
+  // Prefer US English from filtered
+  var usEn = filtered.find(function(vv) {{ return vv.lang === 'en-US' && vv.localService; }});
+  if (usEn) return usEn;
+  var anyEn = filtered.find(function(vv) {{ return vv.lang && vv.lang.startsWith('en'); }});
+  if (anyEn) return anyEn;
+  return voices[0];
 }}
 
 function playBeep() {{
