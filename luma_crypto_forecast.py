@@ -1070,13 +1070,13 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
         arr = "▲" if pct >= 0 else "▼"
         tf_rows += f"""
 <div style="display:flex;justify-content:space-between;align-items:center;
-  padding:9px 0;border-bottom:1px solid #0d1225">
-  <span style="color:#64748b;font-size:.75rem;font-weight:700;letter-spacing:.06em;min-width:40px">{tf.upper()}</span>
-  <span style="color:#94a3b8;font-size:.75rem;font-family:'IBM Plex Mono',monospace">${s['last']:,.4f}</span>
-  <span style="color:#475569;font-size:.72rem">→</span>
-  <span style="color:{c};font-size:.8rem;font-family:'IBM Plex Mono',monospace;font-weight:600">${s['end']:,.4f}</span>
-  <span style="color:{c};font-size:.72rem;background:{'rgba(52,211,153,.1)' if pct>=0 else 'rgba(248,113,113,.1)'};
-    padding:2px 7px;border-radius:3px">{arr}{abs(pct):.2f}%</span>
+  padding:11px 0;border-bottom:1px solid #0d1225">
+  <span style="color:#64748b;font-size:.9rem;font-weight:700;letter-spacing:.06em;min-width:44px">{tf.upper()}</span>
+  <span style="color:#94a3b8;font-size:.9rem;font-family:'IBM Plex Mono',monospace">${s['last']:,.4f}</span>
+  <span style="color:#475569;font-size:.88rem">→</span>
+  <span style="color:{c};font-size:.98rem;font-family:'IBM Plex Mono',monospace;font-weight:700">${s['end']:,.4f}</span>
+  <span style="color:{c};font-size:.86rem;font-weight:700;background:{'rgba(52,211,153,.1)' if pct>=0 else 'rgba(248,113,113,.1)'};
+    padding:3px 9px;border-radius:3px">{arr}{abs(pct):.2f}%</span>
 </div>"""
 
     def trade_block(label, entry, sl, tp1, tp2, rrr, conf, notes, col, idx):
@@ -1085,37 +1085,37 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 <div style="background:#0a0d1c;border:1px solid {col}22;border-left:3px solid {col};
   border-radius:8px;padding:16px 18px;margin-bottom:14px">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-    <span style="color:{col};font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase">
+    <span style="color:{col};font-size:.86rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase">
       Trade {idx} — {label}
     </span>
     <span style="background:{conf_c}22;border:1px solid {conf_c}55;color:{conf_c};
-      font-size:.6rem;font-weight:700;padding:3px 9px;border-radius:3px;letter-spacing:.07em">
+      font-size:.74rem;font-weight:700;padding:4px 10px;border-radius:3px;letter-spacing:.07em">
       {conf}
     </span>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px">
     <div>
-      <div style="color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Entry Zone</div>
-      <div style="color:#f1f5f9;font-size:.78rem;font-family:'IBM Plex Mono',monospace;font-weight:600">{entry}</div>
+      <div style="color:#374151;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Entry Zone</div>
+      <div style="color:#f1f5f9;font-size:.96rem;font-family:'IBM Plex Mono',monospace;font-weight:700">{entry}</div>
     </div>
     <div>
-      <div style="color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Stop Loss</div>
-      <div style="color:#f87171;font-size:.78rem;font-family:'IBM Plex Mono',monospace;font-weight:600">{sl}</div>
+      <div style="color:#374151;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Stop Loss</div>
+      <div style="color:#f87171;font-size:.96rem;font-family:'IBM Plex Mono',monospace;font-weight:700">{sl}</div>
     </div>
     <div>
-      <div style="color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">TP1 (60%)</div>
-      <div style="color:#34d399;font-size:.78rem;font-family:'IBM Plex Mono',monospace;font-weight:600">{tp1}</div>
+      <div style="color:#374151;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">TP1 (60%)</div>
+      <div style="color:#34d399;font-size:.96rem;font-family:'IBM Plex Mono',monospace;font-weight:700">{tp1}</div>
     </div>
     <div>
-      <div style="color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">TP2 (runner)</div>
-      <div style="color:#34d399;font-size:.78rem;font-family:'IBM Plex Mono',monospace;font-weight:600">{tp2}</div>
+      <div style="color:#374151;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">TP2 (runner)</div>
+      <div style="color:#34d399;font-size:.96rem;font-family:'IBM Plex Mono',monospace;font-weight:700">{tp2}</div>
     </div>
     <div>
-      <div style="color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">R:R Ratio</div>
-      <div style="color:#a78bfa;font-size:.78rem;font-family:'IBM Plex Mono',monospace;font-weight:600">1 : {rrr}</div>
+      <div style="color:#374151;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">R:R Ratio</div>
+      <div style="color:#a78bfa;font-size:.96rem;font-family:'IBM Plex Mono',monospace;font-weight:700">1 : {rrr}</div>
     </div>
   </div>
-  <div style="color:#475569;font-size:.78rem;line-height:1.75;padding-top:10px;border-top:1px solid #111827">
+  <div style="color:#64748b;font-size:.88rem;line-height:1.82;padding-top:10px;border-top:1px solid #111827">
     {notes}
   </div>
 </div>"""
@@ -1159,6 +1159,12 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
     else:
         of_block = ""
 
+    # Build static visible paragraphs for LOMA block
+    voice_paragraphs = ''.join(
+        f'<p style="margin:0 0 16px;color:#a7f3d0;font-size:1.05rem;line-height:1.9">{p.strip()}</p>'
+        for p in voice_text.split('\n') if p.strip()
+    )
+
     # TTS — use window.top to escape Streamlit's iframes
     voice_tts = voice_text.replace('"', "'").replace('\n', ' ').replace('\\', '')
 
@@ -1168,10 +1174,10 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 .apg{{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));
   gap:1px;background:#111827;border:1px solid #111827;border-radius:8px;margin-bottom:14px;overflow:hidden}}
 .apc{{background:#0a0d1c;padding:11px 13px}}
-.apc .al{{color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.09em;margin-bottom:4px}}
-.apc .av{{font-family:'IBM Plex Mono',monospace!important;font-size:.86rem;font-weight:600;line-height:1.2}}
+.apc .al{{color:#374151;font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;margin-bottom:5px}}
+.apc .av{{font-family:'IBM Plex Mono',monospace!important;font-size:1.08rem;font-weight:700;line-height:1.2}}
 .aps{{background:#0d1225;border:1px solid #111827;border-radius:8px;padding:14px 16px;margin-bottom:14px}}
-.ap-sh2{{color:#38bdf8;font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px}}
+.ap-sh2{{color:#38bdf8;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px}}
 .lv2{{background:linear-gradient(135deg,#080f08,#0d1225);
   border:1px solid #1a3a1a;border-left:3px solid #34d399;border-radius:8px;padding:18px 20px;margin-bottom:14px}}
 .lv2-hdr{{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}}
@@ -1192,18 +1198,18 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 
 <!-- STATS GRID -->
 <div class="apg">
-  <div class="apc"><div class="al">Price</div><div class="av" style="color:#f1f5f9">${price:,.4f}</div></div>
-  <div class="apc"><div class="al">Bias</div><div class="av" style="color:{bias_color}">{bias_lbl}</div></div>
-  <div class="apc"><div class="al">Support</div><div class="av" style="color:#34d399">${t['support']:,.4f}</div></div>
-  <div class="apc"><div class="al">Resistance</div><div class="av" style="color:#f87171">${t['resistance']:,.4f}</div></div>
-  <div class="apc"><div class="al">RSI (14)</div><div class="av" style="color:{rsi_col}">{t['rsi']:.1f}</div></div>
-  <div class="apc"><div class="al">RSI Read</div><div class="av" style="color:{rsi_col};font-size:.68rem">{rsi_note}</div></div>
-  <div class="apc"><div class="al">EMA Stack</div><div class="av" style="color:{ema_col};font-size:.7rem">{ema_lbl}</div></div>
-  <div class="apc"><div class="al">ATR</div><div class="av" style="color:#94a3b8">${t['atr']:,.4f}</div></div>
-  <div class="apc"><div class="al">5-Bar Mom</div><div class="av" style="color:{mom5_color}">{t['mom_5']:+.2f}%</div></div>
-  <div class="apc"><div class="al">50-Bar High</div><div class="av" style="color:#94a3b8">${t['high_50']:,.4f}</div></div>
-  <div class="apc"><div class="al">50-Bar Low</div><div class="av" style="color:#94a3b8">${t['low_50']:,.4f}</div></div>
-  <div class="apc"><div class="al">Volume</div><div class="av" style="color:{'#34d399' if t['vol_trend']=='rising' else '#94a3b8'};font-size:.7rem">{t['vol_trend'].upper()}</div></div>
+  <div class="apc"><div class="al">Price</div><div class="av" style="color:#f1f5f9;font-size:1.2rem">${price:,.4f}</div></div>
+  <div class="apc"><div class="al">Bias</div><div class="av" style="color:{bias_color};font-size:1.2rem">{bias_lbl}</div></div>
+  <div class="apc"><div class="al">Support</div><div class="av" style="color:#34d399;font-size:1.1rem">${t['support']:,.4f}</div></div>
+  <div class="apc"><div class="al">Resistance</div><div class="av" style="color:#f87171;font-size:1.1rem">${t['resistance']:,.4f}</div></div>
+  <div class="apc"><div class="al">RSI (14)</div><div class="av" style="color:{rsi_col};font-size:1.15rem">{t['rsi']:.1f}</div></div>
+  <div class="apc"><div class="al">RSI Read</div><div class="av" style="color:{rsi_col};font-size:.82rem">{rsi_note}</div></div>
+  <div class="apc"><div class="al">EMA Stack</div><div class="av" style="color:{ema_col};font-size:.88rem">{ema_lbl}</div></div>
+  <div class="apc"><div class="al">ATR</div><div class="av" style="color:#94a3b8;font-size:1.05rem">${t['atr']:,.4f}</div></div>
+  <div class="apc"><div class="al">5-Bar Mom</div><div class="av" style="color:{mom5_color};font-size:1.05rem">{t['mom_5']:+.2f}%</div></div>
+  <div class="apc"><div class="al">50-Bar High</div><div class="av" style="color:#94a3b8;font-size:1.0rem">${t['high_50']:,.4f}</div></div>
+  <div class="apc"><div class="al">50-Bar Low</div><div class="av" style="color:#94a3b8;font-size:1.0rem">${t['low_50']:,.4f}</div></div>
+  <div class="apc"><div class="al">Volume</div><div class="av" style="color:{'#34d399' if t['vol_trend']=='rising' else '#94a3b8'};font-size:.9rem">{t['vol_trend'].upper()}</div></div>
 </div>
 
 <!-- FORECAST TABLE -->
@@ -1211,8 +1217,8 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
   <div class="ap-sh2">Forecast Targets — All Timeframes</div>
   {tf_rows}
   <div style="margin-top:10px;padding-top:8px;border-top:1px solid #111827;display:flex;justify-content:space-between;align-items:center">
-    <span style="color:#374151;font-size:.6rem;text-transform:uppercase;letter-spacing:.08em">Confluence</span>
-    <span style="color:{conf_color};font-size:.78rem;font-weight:700">{conf_lbl}</span>
+    <span style="color:#374151;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em">Confluence</span>
+    <span style="color:{conf_color};font-size:.96rem;font-weight:700">{conf_lbl}</span>
   </div>
 </div>
 
@@ -1234,52 +1240,10 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
     </div>
     <button class="tts-btn" id="tts-toggle-btn" onclick="lomaToggle()">◉ SPEAKING</button>
   </div>
-  <div id="lv2-text" style="min-height:40px">
-    <span id="lv2-cursor" style="display:inline-block;width:2px;height:1em;background:#34d399;vertical-align:middle;animation:cur-blink .6s step-end infinite;margin-left:2px"></span>
+  <div id="lv2-text" style="min-height:60px">
+    {voice_paragraphs}
   </div>
 </div>
-<style>
-@keyframes cur-blink{{0%,100%{{opacity:1}}50%{{opacity:0}}}}
-</style>
-<script>
-// ── MATRIX TYPING EFFECT for LOMA voice block ─────────────────────────
-(function() {{
-  var RAW_PARAS = {json.dumps([p.strip() for p in voice_text.split(chr(10)) if p.strip()])};
-  var container = document.getElementById('lv2-text');
-  var cursor    = document.getElementById('lv2-cursor');
-  if (!container || !RAW_PARAS.length) return;
-
-  var paraIdx = 0, charIdx = 0;
-  var currentP = null;
-  var CHAR_DELAY = 14; // ms per character — fast matrix style
-
-  function nextChar() {{
-    if (paraIdx >= RAW_PARAS.length) {{
-      if (cursor) cursor.style.animation = 'none';
-      return;
-    }}
-    var para = RAW_PARAS[paraIdx];
-    if (charIdx === 0) {{
-      currentP = document.createElement('p');
-      currentP.style.cssText = 'margin:0 0 14px;color:#a7f3d0;font-size:.9rem;line-height:1.88';
-      if (cursor) container.insertBefore(currentP, cursor);
-      else container.appendChild(currentP);
-    }}
-    if (charIdx < para.length) {{
-      currentP.textContent += para[charIdx];
-      charIdx++;
-      setTimeout(nextChar, CHAR_DELAY);
-    }} else {{
-      paraIdx++;
-      charIdx = 0;
-      currentP = null;
-      setTimeout(nextChar, CHAR_DELAY * 8); // brief pause between paragraphs
-    }}
-  }}
-
-  setTimeout(nextChar, 600); // slight delay after page load
-}})();
-</script>
 
 <!-- LIQUIDATION HEATMAP -->
 <div style="margin-bottom:14px">
@@ -1475,9 +1439,43 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 
 def _inject_tts(voice_text):
     """
-    Inject TTS via st_components.html — female voice + beep intro.
+    TTS — flirty female voice.
+    Reads: greeting/joke, ~30% of non-trade paragraphs, flirty sign-off.
+    Skips paragraphs dense with dollar amounts and trade numbers.
     """
-    safe = (voice_text
+    import re as _re
+
+    all_paras = [p.strip() for p in voice_text.split('\n') if p.strip()]
+
+    def _is_trade_numbers(p):
+        # Skip paragraphs that are mostly dollar figures / trade instructions
+        dollar_count = len(_re.findall(r'\$[\d,]+', p))
+        return dollar_count >= 3
+
+    # Always keep opener (first para), filter trades, sample 30% of rest
+    spoken = []
+    if all_paras:
+        spoken.append(all_paras[0])  # greeting always
+    rest = [p for p in all_paras[1:] if not _is_trade_numbers(p)]
+    # Take ~30% — minimum 2, max 4
+    import math as _math
+    n_take = min(4, max(2, _math.ceil(len(rest) * 0.30)))
+    # Pick evenly spaced so we get a good cross-section
+    if rest:
+        step = max(1, len(rest) // n_take)
+        for i in range(0, min(len(rest), n_take * step), step):
+            spoken.append(rest[i])
+
+    # Flirty closing
+    spoken.append(
+        "Anyway Nancy... that's what I see right now. "
+        "If you have any questions, you know where to find me — just type below. "
+        "I'll be here. Always."
+    )
+
+    spoken_text = ' '.join(spoken)
+
+    safe = (spoken_text
             .replace("\\", "\\\\")
             .replace('"', '\\"')
             .replace("'", "\\'")
@@ -1487,7 +1485,9 @@ def _inject_tts(voice_text):
             .replace("%", " percent")
             .replace("→", "to")
             .replace("▲", "up")
-            .replace("▼", "down"))
+            .replace("▼", "down")
+            .replace("**", "")
+            .replace("*", ""))
 
     st_components.html(f"""
 <!DOCTYPE html>
@@ -1497,8 +1497,8 @@ def _inject_tts(voice_text):
   #loma-tts-btn{{
     background:linear-gradient(135deg,rgba(0,255,136,.18),rgba(0,180,100,.1));
     border:1px solid rgba(0,255,136,.5);
-    color:#00ff88;font-size:11px;font-weight:800;letter-spacing:.14em;
-    padding:8px 18px;border-radius:4px;cursor:pointer;
+    color:#00ff88;font-size:12px;font-weight:800;letter-spacing:.14em;
+    padding:9px 18px;border-radius:4px;cursor:pointer;
     font-family:'IBM Plex Mono',monospace;text-transform:uppercase;
     display:block;width:100%;box-sizing:border-box;
     box-shadow:0 0 18px rgba(0,255,136,.15);
@@ -1506,7 +1506,7 @@ def _inject_tts(voice_text):
   }}
   #loma-tts-btn:hover{{box-shadow:0 0 32px rgba(0,255,136,.35)}}
   #loma-tts-btn.off{{background:rgba(30,41,59,.4);border-color:rgba(100,116,139,.3);color:#475569;box-shadow:none}}
-  #status{{color:#1e3a1e;font-size:9px;margin-top:3px;font-family:'IBM Plex Mono',monospace;text-align:center;letter-spacing:.08em}}
+  #status{{color:#1e3a1e;font-size:10px;margin-top:3px;font-family:'IBM Plex Mono',monospace;text-align:center;letter-spacing:.08em}}
 </style></head>
 <body>
 <button id="loma-tts-btn" onclick="lomaToggle()">◉ LOMA SPEAKING…</button>
@@ -1538,59 +1538,40 @@ function setUI(state) {{
 function pickVoice() {{
   var voices = synth.getVoices();
   if (!voices || voices.length === 0) return null;
-
-  // TIER 1: Exact match known female voices (Windows, macOS, iOS, Android, Chrome)
   var FEMALE_EXACT = [
-    'Microsoft Zira Desktop','Microsoft Zira','Zira',         // Windows US female
-    'Microsoft Aria Online (Natural)','Microsoft Aria','Aria', // Win11 neural female
-    'Microsoft Jenny Online (Natural)','Microsoft Jenny','Jenny', // Win neural female
-    'Microsoft Emma Online (Natural)','Microsoft Emma','Emma', // UK female
-    'Samantha','Samantha (Enhanced)',                          // macOS US female
-    'Karen','Karen (Enhanced)',                                // macOS AU female
-    'Moira','Moira (Enhanced)',                                // macOS IE female
-    'Fiona','Fiona (Enhanced)',                                // macOS Scots female
-    'Tessa','Tessa (Enhanced)',                                // macOS ZA female
-    'Victoria','Ava','Ava (Enhanced)','Allison','Susan',       // macOS US females
-    'Nicky','Serena','Sangeeta','Veena',                       // macOS more females
-    'Google UK English Female','Google US English',            // Chrome TTS females
-    'en-US-Standard-C','en-US-Standard-E','en-US-Wavenet-C',  // Google WaveNet females
+    'Microsoft Zira Desktop','Microsoft Zira','Zira',
+    'Microsoft Aria Online (Natural)','Microsoft Aria','Aria',
+    'Microsoft Jenny Online (Natural)','Microsoft Jenny','Jenny',
+    'Microsoft Emma Online (Natural)','Microsoft Emma','Emma',
+    'Samantha','Samantha (Enhanced)','Karen','Karen (Enhanced)',
+    'Moira','Moira (Enhanced)','Fiona','Fiona (Enhanced)',
+    'Tessa','Tessa (Enhanced)','Victoria','Ava','Ava (Enhanced)',
+    'Allison','Susan','Nicky','Serena','Sangeeta','Veena',
+    'Google UK English Female','Google US English',
+    'en-US-Standard-C','en-US-Standard-E','en-US-Wavenet-C',
     'en-US-Neural2-C','en-US-Neural2-E','en-US-Neural2-F',
   ];
-
   for (var i = 0; i < FEMALE_EXACT.length; i++) {{
     var match = voices.find(function(v) {{ return v.name === FEMALE_EXACT[i]; }});
     if (match) return match;
   }}
-
-  // TIER 2: Name contains female keywords
-  var FEMALE_KW = ['female','woman','girl','femenino','femme','zira','aria','emma',
-    'jenny','karen','samantha','ava','allison','victoria','serena','nicky','moira',
-    'fiona','tessa','veena','sangeeta','roza','paulina','luciana'];
+  var FEMALE_KW = ['female','woman','girl','zira','aria','emma','jenny','karen',
+    'samantha','ava','allison','victoria','serena','nicky','moira','fiona','tessa'];
   for (var j = 0; j < FEMALE_KW.length; j++) {{
     var kw = FEMALE_KW[j];
     var kv = voices.find(function(v) {{ return v.name.toLowerCase().indexOf(kw) >= 0; }});
     if (kv) return kv;
   }}
-
-  // TIER 3: Filter out known male voices, pick best remaining en-US
-  var MALE_NAMES = ['Alex','David','Daniel','Tom','Fred','Ralph','Bruce','Junior',
-    'Albert','Boing','Bubbles','Cellos','Deranged','Hysterical','Organ','Trinoids',
-    'Whisper','Zarvox','Google UK English Male','Microsoft David','Microsoft Mark',
-    'Microsoft James','en-US-Standard-B','en-US-Standard-D','en-US-Wavenet-B',
-    'en-US-Wavenet-D','en-GB-Standard-B','en-GB-Standard-D'];
+  var MALE_NAMES = ['Alex','David','Daniel','Tom','Fred','Ralph','Bruce',
+    'Google UK English Male','Microsoft David','Microsoft Mark','Microsoft James'];
   var notMale = voices.filter(function(v) {{
     return !MALE_NAMES.some(function(m) {{ return v.name.indexOf(m) >= 0; }});
   }});
-
-  // Among non-male: prefer en-US local, then any en-US, then any en
   var local = notMale.find(function(v) {{ return v.lang === 'en-US' && v.localService; }});
   if (local) return local;
   var anyUS = notMale.find(function(v) {{ return v.lang === 'en-US'; }});
   if (anyUS) return anyUS;
-  var anyEN = notMale.find(function(v) {{ return v.lang && v.lang.startsWith('en'); }});
-  if (anyEN) return anyEN;
   if (notMale.length > 0) return notMale[0];
-
   return voices[0];
 }}
 
@@ -1598,21 +1579,17 @@ function playBeep() {{
   return new Promise(function(resolve) {{
     try {{
       var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      // LOMA signature beep sequence: 3 short ascending beeps
       var times = [0, 0.12, 0.24];
       var freqs = [440, 554, 660];
       times.forEach(function(t, i) {{
         var osc = ctx.createOscillator();
         var gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.value = freqs[i];
-        osc.type = 'sine';
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = freqs[i]; osc.type = 'sine';
         gain.gain.setValueAtTime(0, ctx.currentTime + t);
         gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + t + 0.02);
         gain.gain.linearRampToValueAtTime(0, ctx.currentTime + t + 0.09);
-        osc.start(ctx.currentTime + t);
-        osc.stop(ctx.currentTime + t + 0.1);
+        osc.start(ctx.currentTime + t); osc.stop(ctx.currentTime + t + 0.1);
       }});
       setTimeout(resolve, 500);
     }} catch(e) {{ resolve(); }}
@@ -1621,15 +1598,12 @@ function playBeep() {{
 
 function speak() {{
   synth.cancel();
-  muted = false;
-  speaking = true;
+  muted = false; speaking = true;
   setUI('speaking');
-
   playBeep().then(function() {{
     if (muted) return;
     var sentences = TEXT.match(/[^.!?]+[.!?]+/g) || [TEXT];
     var idx = 0;
-
     function next() {{
       if (idx >= sentences.length || muted) {{
         speaking = false;
@@ -1639,37 +1613,30 @@ function speak() {{
       var sentence = sentences[idx++].trim();
       if (!sentence) {{ next(); return; }}
       var u = new SpeechSynthesisUtterance(sentence);
-      u.rate  = 0.88;
-      u.pitch = 1.22;
-      u.volume = 1.0;
+      u.rate = 0.88; u.pitch = 1.22; u.volume = 1.0;
       var v = pickVoice();
       if (v) u.voice = v;
       u.onend = next;
-      u.onerror = function(e) {{ if (!muted) setTimeout(next, 100); }};
+      u.onerror = function() {{ if (!muted) setTimeout(next, 100); }};
       synth.speak(u);
     }}
-
-    // Chrome keepalive
     var keepAlive = setInterval(function() {{
       if (!speaking) {{ clearInterval(keepAlive); return; }}
       synth.pause(); synth.resume();
     }}, 10000);
-
     next();
   }});
 }}
 
 window.lomaToggle = function() {{
-  if (speaking) {{
-    muted = true; speaking = false; synth.cancel(); setUI('stopped');
-  }} else {{ speak(); }}
+  if (speaking) {{ muted = true; speaking = false; synth.cancel(); setUI('stopped'); }}
+  else {{ speak(); }}
 }};
 
 function init() {{
   var voices = synth.getVoices();
-  if (voices.length > 0) {{
-    setTimeout(speak, 400);
-  }} else {{
+  if (voices.length > 0) {{ setTimeout(speak, 400); }}
+  else {{
     synth.onvoiceschanged = function() {{ setTimeout(speak, 300); }};
     setTimeout(function() {{ if (!speaking) speak(); }}, 1500);
   }}
@@ -1682,6 +1649,79 @@ init();
 
 
 
+
+
+def _render_matrix_typing(voice_text):
+    """
+    Runs in st_components iframe and types paragraphs letter-by-letter
+    into the parent page's #lv2-text div via window.parent.document.
+    Uses only ASCII JS operators to avoid Streamlit markdown encoding issues.
+    """
+    import json as _json
+    paras_json = _json.dumps([p.strip() for p in voice_text.split('\n') if p.strip()])
+
+    st_components.html(f"""
+<!DOCTYPE html><html><head>
+<style>body{{margin:0;padding:0;overflow:hidden;height:1px}}</style>
+</head><body>
+<script>
+(function() {{
+  var PARAS = {paras_json};
+  var DELAY = 13;
+  var paraIdx = 0, charIdx = 0, currentP = null;
+
+  function getContainer() {{
+    try {{
+      return window.parent.document.getElementById('lv2-text')
+          || window.top.document.getElementById('lv2-text');
+    }} catch(e) {{ return null; }}
+  }}
+
+  function nextChar() {{
+    var container = getContainer();
+    if (!container) {{ setTimeout(nextChar, 200); return; }}
+
+    // On first paragraph, clear the static content so typing takes over
+    if (paraIdx === 0 && charIdx === 0) {{
+      container.innerHTML = '<span id="lv2-cursor-anim" style="display:inline-block;width:2px;height:1.1em;background:#34d399;vertical-align:middle;animation:cb .55s step-end infinite;margin-left:1px"></span>';
+      var sty = window.parent.document.createElement('style');
+      sty.textContent = '@keyframes cb{{0%,100%{{opacity:1}}50%{{opacity:0}}}}';
+      window.parent.document.head.appendChild(sty);
+    }}
+
+    if (paraIdx >= PARAS.length) {{
+      var cur = container.querySelector('#lv2-cursor-anim');
+      if (cur) cur.style.animation = 'none';
+      return;
+    }}
+
+    var para = PARAS[paraIdx];
+    if (charIdx === 0) {{
+      currentP = window.parent.document.createElement('p');
+      currentP.style.cssText = 'margin:0 0 16px;color:#a7f3d0;font-size:1.05rem;line-height:1.9';
+      var cursor = container.querySelector('#lv2-cursor-anim');
+      if (cursor) container.insertBefore(currentP, cursor);
+      else container.appendChild(currentP);
+    }}
+
+    if (charIdx < para.length) {{
+      currentP.textContent += para[charIdx];
+      charIdx++;
+      setTimeout(nextChar, DELAY);
+    }} else {{
+      paraIdx++;
+      charIdx = 0;
+      currentP = null;
+      setTimeout(nextChar, DELAY * 10);
+    }}
+  }}
+
+  // Wait for parent DOM to be ready then start typing
+  setTimeout(nextChar, 800);
+}})();
+</script>
+</body></html>
+""", height=1, scrolling=False)
 
 
 def do_analysis(sym, summaries, raw_dfs):
@@ -2876,6 +2916,7 @@ div.run-luma-wrap .stButton>button:active{
 
         _render_analysis_panel(symbol, summaries, raw_dfs, voice_text)
         _inject_tts(voice_text)
+        _render_matrix_typing(voice_text)
         _render_chat_input(symbol, summaries, raw_dfs)
 
     elif st.session_state.forecast_ran and st.session_state.summaries:
