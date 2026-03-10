@@ -202,8 +202,72 @@ def live_ticker(sym):
     except: return None, None, None
 
 # ─────────────────────────────────────────────────────────────────────
-#  FORECAST MODEL
+#  ORDER FLOW — CVD / DELTA  (inspired by StefiT/order_flow)
+#  Uses Binance.US /api/v3/trades (real aggTrades for US users)
 # ─────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_order_flow(symbol: str, limit: int = 500):
+    """
+    Fetch recent aggTrades from Binance.US and compute:
+    - delta (buy_vol - sell_vol) per candle-equivalent bucket
+    - cumulative volume delta (CVD)
+    - buy/sell ratio
+    - large-trade absorption signals
+    Returns a dict with flow metrics.
+    """
+    try:
+        url  = f"{BINANCE}/api/v3/aggTrades"
+        resp = requests.get(url, params={"symbol": symbol, "limit": limit}, timeout=8)
+        resp.raise_for_status()
+        trades = resp.json()
+        if not trades or isinstance(trades, dict):
+            return None
+
+        buy_vol  = sum(float(t["q"]) for t in trades if not t["m"])  # m=True means maker=sell
+        sell_vol = sum(float(t["q"]) for t in trades if t["m"])
+        total_vol = buy_vol + sell_vol
+        delta     = buy_vol - sell_vol
+        buy_pct   = (buy_vol / total_vol * 100) if total_vol > 0 else 50.0
+        sell_pct  = 100.0 - buy_pct
+
+        # CVD trajectory — split trades into 5 buckets, compute running delta
+        bucket_size = max(1, len(trades) // 5)
+        cvd_points  = []
+        running_cvd = 0.0
+        for i in range(0, len(trades), bucket_size):
+            chunk = trades[i:i+bucket_size]
+            b = sum(float(t["q"]) for t in chunk if not t["m"])
+            s = sum(float(t["q"]) for t in chunk if t["m"])
+            running_cvd += (b - s)
+            cvd_points.append(running_cvd)
+
+        cvd_slope = (cvd_points[-1] - cvd_points[0]) if len(cvd_points) >= 2 else 0
+
+        # Large trade detection (top 5% by size = absorption signals)
+        sizes = sorted([float(t["q"]) for t in trades], reverse=True)
+        threshold = sizes[max(0, len(sizes)//20)] if sizes else 0
+        large_buys  = sum(float(t["q"]) for t in trades if not t["m"] and float(t["q"]) >= threshold)
+        large_sells = sum(float(t["q"]) for t in trades if t["m"]  and float(t["q"]) >= threshold)
+
+        bias = "BULLISH" if delta > 0 else "BEARISH"
+        cvd_dir = "rising" if cvd_slope > 0 else "falling"
+
+        return {
+            "delta":       delta,
+            "buy_vol":     buy_vol,
+            "sell_vol":    sell_vol,
+            "buy_pct":     buy_pct,
+            "sell_pct":    sell_pct,
+            "cvd_slope":   cvd_slope,
+            "cvd_dir":     cvd_dir,
+            "large_buys":  large_buys,
+            "large_sells": large_sells,
+            "bias":        bias,
+            "total_vol":   total_vol,
+            "cvd_points":  cvd_points,
+        }
+    except Exception:
+        return None
 @st.cache_resource(show_spinner=False)
 def load_model():
     try:
@@ -766,14 +830,14 @@ def _loma_voice_summary(sym, summaries, raw_dfs):
 
     # ── LINE 1: Punchy, variable, funny openers ────────────────────────
     openers = [
-        f"Nancy. You showed up at exactly the right time — or the worst. Let me tell you which.",
-        f"Welcome back, Nancy. {coin} has been misbehaving while you were gone. Classic.",
-        f"Oh good, Nancy's here. I was starting to worry the market would have to manipulate itself.",
-        f"Nancy, you absolute menace. Back for more? Let's see what the market has cooked up today.",
-        f"Nancy. Pull up a chair. {coin} has been doing things I need to show you immediately.",
-        f"Ah yes, Nancy arrives precisely when the chart gets interesting. As always.",
-        f"Welcome back. Quick warning — {coin} has been lying to retail traders all morning. I'll explain.",
-        f"Nancy, good timing. Or terrible timing. Depends entirely on what I'm about to tell you.",
+        f"Hello Nancy. Back for more, huh? You know, most people go to therapy to deal with their problems — you come back to me. I respect it. Let me guess: you need money for something. Let's make that happen.",
+        f"Nancy! Back again! You know what they say — the market takes money from the impatient and gives it to the patient. Good thing you have LOMA. Now let's talk about {coin}.",
+        f"Well well well, look who showed up. Nancy, back for more alpha like it's a vending machine. You put in stress, I spit out setups. Let's get into {coin} before the market moves without us.",
+        f"Hello Nancy. Back for more, and honestly? Bold of you. Last time you were here, the chart was cleaner. But don't worry — LOMA's got you. You need money for something? Let me see what we can find.",
+        f"Nancy. You absolute menace. Back for more? {coin} has been doing things I need to show you immediately. And yes, I can already see why you need money — let's fix that.",
+        f"Oh good, Nancy's here. I was starting to worry the market would have to manipulate itself. Back for more setups? Let's check what {coin} is cooking today.",
+        f"Welcome back, Nancy. {coin} has been misbehaving while you were gone. Classic. But hey — every bit of misbehaving is an opportunity if you know how to read it. Let me tell you what I see.",
+        f"Ah yes, Nancy arrives precisely when the chart gets interesting. As always. Ready? Here's the full read on {coin} — and yes, there is a setup worth taking.",
     ]
     opener = rng.choice(openers)
 
@@ -1059,10 +1123,41 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
     tb1 = trade_block(t1_label, t1_entry, t1_sl, t1_tp1, t1_tp2, t1_rrr, t1_conf, t1_notes, t1_col, 1)
     tb2 = trade_block(t2_label, t2_entry, t2_sl, t2_tp1, t2_tp2, t2_rrr, t2_conf, t2_notes, t2_col, 2)
 
-    voice_paragraphs = ''.join(
-        f'<p style="margin:0 0 14px;color:#a7f3d0;font-size:.9rem;line-height:1.88">{p.strip()}</p>'
-        for p in voice_text.split('\n') if p.strip()
-    )
+    # ── Order Flow Block ─────────────────────────────────────────────────
+    of = fetch_order_flow(sym)
+    if of:
+        of_bias_col  = "#34d399" if of["bias"] == "BULLISH" else "#f87171"
+        cvd_col      = "#34d399" if of["cvd_dir"] == "rising" else "#f87171"
+        lb_col       = "#34d399" if of["large_buys"] >= of["large_sells"] else "#f87171"
+        of_block = f"""
+<div style="background:#0a0d1c;border:1px solid #1e3a5f;border-left:3px solid #38bdf8;
+  border-radius:8px;padding:14px 18px;margin-bottom:14px">
+  <div style="color:#38bdf8;font-size:.6rem;font-weight:700;letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:12px">⚡ LIVE ORDER FLOW — LAST 500 TRADES (Binance.US)</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px">
+    <div><div style="color:#374151;font-size:.56rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px">Flow Bias</div>
+      <div style="color:{of_bias_col};font-size:.88rem;font-weight:700;font-family:'IBM Plex Mono',monospace">{of["bias"]}</div></div>
+    <div><div style="color:#374151;font-size:.56rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px">Buy Vol %</div>
+      <div style="color:#34d399;font-size:.88rem;font-weight:700;font-family:'IBM Plex Mono',monospace">{of["buy_pct"]:.1f}%</div></div>
+    <div><div style="color:#374151;font-size:.56rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px">Sell Vol %</div>
+      <div style="color:#f87171;font-size:.88rem;font-weight:700;font-family:'IBM Plex Mono',monospace">{of["sell_pct"]:.1f}%</div></div>
+    <div><div style="color:#374151;font-size:.56rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px">Delta</div>
+      <div style="color:{of_bias_col};font-size:.88rem;font-weight:700;font-family:'IBM Plex Mono',monospace">{"+" if of["delta"]>=0 else ""}{of["delta"]:,.1f}</div></div>
+    <div><div style="color:#374151;font-size:.56rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px">CVD Trend</div>
+      <div style="color:{cvd_col};font-size:.88rem;font-weight:700;font-family:'IBM Plex Mono',monospace">{of["cvd_dir"].upper()}</div></div>
+    <div><div style="color:#374151;font-size:.56rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px">Large Buyer</div>
+      <div style="color:{lb_col};font-size:.88rem;font-weight:700;font-family:'IBM Plex Mono',monospace">{"DOM" if of["large_buys"]>=of["large_sells"] else "ABSENT"}</div></div>
+  </div>
+  <div style="margin-top:10px;height:4px;background:#111827;border-radius:2px;overflow:hidden">
+    <div style="height:100%;width:{of["buy_pct"]:.1f}%;background:linear-gradient(90deg,#34d399,#059669);border-radius:2px;transition:width .6s ease"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-top:3px">
+    <span style="color:#34d399;font-size:.58rem;font-family:'IBM Plex Mono',monospace">BUY {of["buy_pct"]:.1f}%</span>
+    <span style="color:#f87171;font-size:.58rem;font-family:'IBM Plex Mono',monospace">SELL {of["sell_pct"]:.1f}%</span>
+  </div>
+</div>"""
+    else:
+        of_block = ""
 
     # TTS — use window.top to escape Streamlit's iframes
     voice_tts = voice_text.replace('"', "'").replace('\n', ' ').replace('\\', '')
@@ -1127,6 +1222,9 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 <!-- TRADE SETUP 2 -->
 {tb2}
 
+<!-- ORDER FLOW PANEL -->
+{of_block}
+
 <!-- LOMA VOICE BLOCK -->
 <div class="lv2" id="lv2-block">
   <div class="lv2-hdr">
@@ -1136,134 +1234,166 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
     </div>
     <button class="tts-btn" id="tts-toggle-btn" onclick="lomaToggle()">◉ SPEAKING</button>
   </div>
-  <div id="lv2-text">
-    {voice_paragraphs}
+  <div id="lv2-text" style="min-height:40px">
+    <span id="lv2-cursor" style="display:inline-block;width:2px;height:1em;background:#34d399;vertical-align:middle;animation:cur-blink .6s step-end infinite;margin-left:2px"></span>
   </div>
 </div>
-
-<!-- FAKE LIVE METRICS BAR: OI + Funding Rate -->
-<div id="live-metrics-bar" style="
-  display:grid;grid-template-columns:repeat(6,1fr);gap:1px;
-  background:#0d1020;border:1px solid #111827;border-radius:6px;
-  margin-bottom:14px;overflow:hidden">
-  <div class="lm-cell"><div class="lm-l">OPEN INTEREST</div><div class="lm-v" id="lm-oi" style="color:#a78bfa">$2.84B</div></div>
-  <div class="lm-cell"><div class="lm-l">OI CHANGE 1H</div><div class="lm-v" id="lm-oi-chg" style="color:#34d399">+1.2%</div></div>
-  <div class="lm-cell"><div class="lm-l">FUNDING RATE</div><div class="lm-v" id="lm-fund" style="color:#fbbf24">0.0082%</div></div>
-  <div class="lm-cell"><div class="lm-l">LONG RATIO</div><div class="lm-v" id="lm-long" style="color:#34d399">52.3%</div></div>
-  <div class="lm-cell"><div class="lm-l">SHORT RATIO</div><div class="lm-v" id="lm-short" style="color:#f87171">47.7%</div></div>
-  <div class="lm-cell"><div class="lm-l">LIQUIDATIONS 1H</div><div class="lm-v" id="lm-liq" style="color:#f87171">$4.1M</div></div>
-</div>
-
 <style>
-.lm-cell{{background:#070a12;padding:10px 14px}}
-.lm-l{{color:#374151;font-size:.58rem;text-transform:uppercase;letter-spacing:.09em;margin-bottom:4px}}
-.lm-v{{font-family:'IBM Plex Mono',monospace;font-size:.9rem;font-weight:700;transition:color .3s}}
-
-/* zoomable image wrapper */
-.zoom-wrap{{
-  position:relative;overflow:hidden;cursor:zoom-in;
-  background:#070a12;border:1px solid #111827;border-radius:8px;
-  user-select:none;
-}}
-.zoom-wrap img{{
-  width:100%;display:block;transition:transform .15s ease;
-  transform-origin:0 0;pointer-events:none;
-}}
-.zoom-wrap .zoom-hint{{
-  position:absolute;bottom:6px;right:10px;
-  color:rgba(255,255,255,.25);font-size:.6rem;font-family:'IBM Plex Mono',monospace;
-  letter-spacing:.08em;pointer-events:none
-}}
-.zoom-wrap .zoom-reset{{
-  position:absolute;top:8px;right:10px;
-  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.12);
-  color:rgba(255,255,255,.5);font-size:.6rem;font-family:'IBM Plex Mono',monospace;
-  padding:3px 8px;border-radius:3px;cursor:pointer;letter-spacing:.06em;
-  opacity:0;transition:opacity .2s
-}}
-.zoom-wrap:hover .zoom-reset{{opacity:1}}
+@keyframes cur-blink{{0%,100%{{opacity:1}}50%{{opacity:0}}}}
 </style>
+<script>
+// ── MATRIX TYPING EFFECT for LOMA voice block ─────────────────────────
+(function() {{
+  var RAW_PARAS = {json.dumps([p.strip() for p in voice_text.split(chr(10)) if p.strip()])};
+  var container = document.getElementById('lv2-text');
+  var cursor    = document.getElementById('lv2-cursor');
+  if (!container || !RAW_PARAS.length) return;
 
-<!-- LIQUIDATION HEATMAP IMAGE -->
+  var paraIdx = 0, charIdx = 0;
+  var currentP = null;
+  var CHAR_DELAY = 14; // ms per character — fast matrix style
+
+  function nextChar() {{
+    if (paraIdx >= RAW_PARAS.length) {{
+      if (cursor) cursor.style.animation = 'none';
+      return;
+    }}
+    var para = RAW_PARAS[paraIdx];
+    if (charIdx === 0) {{
+      currentP = document.createElement('p');
+      currentP.style.cssText = 'margin:0 0 14px;color:#a7f3d0;font-size:.9rem;line-height:1.88';
+      if (cursor) container.insertBefore(currentP, cursor);
+      else container.appendChild(currentP);
+    }}
+    if (charIdx < para.length) {{
+      currentP.textContent += para[charIdx];
+      charIdx++;
+      setTimeout(nextChar, CHAR_DELAY);
+    }} else {{
+      paraIdx++;
+      charIdx = 0;
+      currentP = null;
+      setTimeout(nextChar, CHAR_DELAY * 8); // brief pause between paragraphs
+    }}
+  }}
+
+  setTimeout(nextChar, 600); // slight delay after page load
+}})();
+</script>
+
+<!-- LIQUIDATION HEATMAP -->
 <div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:8px">🔥 LIQUIDATION HEATMAP &nbsp;<span style="color:#1e293b;font-size:.56rem;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN</span></div>
-  <div class="zoom-wrap" id="zw-heatmap" style="height:280px">
-    <img src="https://app.cdnblock.com/upload/1713366001994-2.png" id="img-heatmap"
-         alt="Liquidation Heatmap"
-         style="width:100%;height:100%;object-fit:cover;pointer-events:none"
-         onerror="this.src='https://coinglass.com/public/imgs/heatmap-placeholder.png'"/>
-    <div class="zoom-hint">SCROLL TO ZOOM · DRAG TO PAN</div>
-    <button class="zoom-reset" onclick="resetZoom('zw-heatmap')">RESET</button>
+  <div class="ap-sh2" style="margin-bottom:10px">🔥 LIQUIDATION HEATMAP</div>
+  <div id="img-wrap-heatmap" style="background:#070a12;border:1px solid #111827;border-radius:8px;
+    overflow:hidden;position:relative;width:100%;cursor:crosshair;user-select:none">
+    <img id="img-heatmap"
+      src="https://app.cdnblock.com/upload/1713366001994-2.png"
+      style="width:100%;height:auto;display:block;transform-origin:center center;transition:none"
+      draggable="false" />
+    <div id="img-reset-heatmap" style="display:none;position:absolute;top:8px;right:8px;
+      background:rgba(7,10,18,.85);border:1px solid #334155;color:#94a3b8;font-size:.65rem;
+      font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
+      letter-spacing:.06em;text-transform:uppercase;z-index:10">RESET</div>
+    <div style="position:absolute;bottom:8px;right:10px;color:#1e293b;font-size:.58rem;
+      font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN · DBL-CLICK ZOOM</div>
   </div>
 </div>
 
-<!-- FOOTPRINT IMAGE -->
+<!-- FOOTPRINT CHART -->
 <div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:8px">📊 ORDER FLOW FOOTPRINT &nbsp;<span style="color:#1e293b;font-size:.56rem;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN</span></div>
-  <div class="zoom-wrap" id="zw-footprint" style="height:300px">
-    <img src="https://i.redd.it/33gffe66fwf61.png" id="img-footprint"
-         alt="Order Flow Footprint"
-         style="width:100%;height:100%;object-fit:cover;pointer-events:none"/>
-    <div class="zoom-hint">SCROLL TO ZOOM · DRAG TO PAN</div>
-    <button class="zoom-reset" onclick="resetZoom('zw-footprint')">RESET</button>
+  <div class="ap-sh2" style="margin-bottom:10px">📊 ORDER FLOW FOOTPRINT</div>
+  <div id="img-wrap-footprint" style="background:#070a12;border:1px solid #111827;border-radius:8px;
+    overflow:hidden;position:relative;width:100%;cursor:crosshair;user-select:none">
+    <img id="img-footprint"
+      src="https://i.redd.it/33gffe66fwf61.png"
+      style="width:100%;height:auto;display:block;transform-origin:center center;transition:none"
+      draggable="false" />
+    <div id="img-reset-footprint" style="display:none;position:absolute;top:8px;right:8px;
+      background:rgba(7,10,18,.85);border:1px solid #334155;color:#94a3b8;font-size:.65rem;
+      font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
+      letter-spacing:.06em;text-transform:uppercase;z-index:10">RESET</div>
+    <div style="position:absolute;bottom:8px;right:10px;color:#1e293b;font-size:.58rem;
+      font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN · DBL-CLICK ZOOM</div>
   </div>
 </div>
 
-<!-- BOOKMAP IMAGE -->
+<!-- BOOKMAP -->
 <div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:8px">📖 LIVE BOOK MAP &nbsp;<span style="color:#1e293b;font-size:.56rem;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN</span></div>
-  <div class="zoom-wrap" id="zw-bookmap" style="height:280px">
-    <img src="https://optimusfutures.com/img/Bookmap/Bookmap-1.jpg" id="img-bookmap"
-         alt="Bookmap Order Flow"
-         style="width:100%;height:100%;object-fit:cover;pointer-events:none"/>
-    <div class="zoom-hint">SCROLL TO ZOOM · DRAG TO PAN</div>
-    <button class="zoom-reset" onclick="resetZoom('zw-bookmap')">RESET</button>
+  <div class="ap-sh2" style="margin-bottom:10px">📈 BOOKMAP — ORDER BOOK DEPTH</div>
+  <div id="img-wrap-bookmap" style="background:#070a12;border:1px solid #111827;border-radius:8px;
+    overflow:hidden;position:relative;width:100%;cursor:crosshair;user-select:none">
+    <img id="img-bookmap"
+      src="https://optimusfutures.com/img/Bookmap/Bookmap-1.jpg"
+      style="width:100%;height:auto;display:block;transform-origin:center center;transition:none"
+      draggable="false" />
+    <div id="img-reset-bookmap" style="display:none;position:absolute;top:8px;right:8px;
+      background:rgba(7,10,18,.85);border:1px solid #334155;color:#94a3b8;font-size:.65rem;
+      font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
+      letter-spacing:.06em;text-transform:uppercase;z-index:10">RESET</div>
+    <div style="position:absolute;bottom:8px;right:10px;color:#1e293b;font-size:.58rem;
+      font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN · DBL-CLICK ZOOM</div>
   </div>
 </div>
 
 </div>
 
 <script>
-// ── ZOOM + PAN for all images ─────────────────────────────────────────
+// ── ZOOMABLE / PANNABLE IMAGE HANDLER ────────────────────────────────
 (function() {{
-  var wrapIds = ['zw-heatmap','zw-footprint','zw-bookmap'];
+  var configs = [
+    {{ wrapId:'img-wrap-heatmap',   imgId:'img-heatmap',   resetId:'img-reset-heatmap'   }},
+    {{ wrapId:'img-wrap-footprint', imgId:'img-footprint', resetId:'img-reset-footprint' }},
+    {{ wrapId:'img-wrap-bookmap',   imgId:'img-bookmap',   resetId:'img-reset-bookmap'   }},
+  ];
 
-  function initZoom(wrapId) {{
-    var wrap = document.getElementById(wrapId);
-    if (!wrap) return;
-    var img = wrap.querySelector('img');
-    var scale = 1, minScale = 1, maxScale = 6;
-    var tx = 0, ty = 0;
-    var dragging = false, startX, startY, startTx, startTy;
+  configs.forEach(function(cfg) {{
+    var wrap  = document.getElementById(cfg.wrapId);
+    var img   = document.getElementById(cfg.imgId);
+    var resetBtn = document.getElementById(cfg.resetId);
+    if (!wrap || !img) return;
 
-    function clamp(v, lo, hi) {{ return Math.max(lo, Math.min(hi, v)); }}
+    var scale = 1, tx = 0, ty = 0;
+    var dragging = false, startX = 0, startY = 0, startTx = 0, startTy = 0;
+    var MAX_SCALE = 6, MIN_SCALE = 1;
 
-    function apply() {{
-      var maxTx = wrap.clientWidth  * (scale - 1);
-      var maxTy = wrap.clientHeight * (scale - 1);
-      tx = clamp(tx, -maxTx, 0);
-      ty = clamp(ty, -maxTy, 0);
+    function applyTransform() {{
       img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
-      img.style.transformOrigin = '0 0';
-      wrap.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
+      if (resetBtn) resetBtn.style.display = (scale > 1.05 || Math.abs(tx) > 5 || Math.abs(ty) > 5) ? 'block' : 'none';
     }}
 
+    function clampPan() {{
+      var wW = wrap.offsetWidth, wH = wrap.offsetHeight;
+      var iW = wW * scale, iH = wH * scale;
+      var maxTx = Math.max(0, (iW - wW) / 2);
+      var maxTy = Math.max(0, (iH - wH) / 2);
+      tx = Math.max(-maxTx, Math.min(maxTx, tx));
+      ty = Math.max(-maxTy, Math.min(maxTy, ty));
+    }}
+
+    // Scroll to zoom
     wrap.addEventListener('wheel', function(e) {{
       e.preventDefault();
       var rect = wrap.getBoundingClientRect();
-      var mx = e.clientX - rect.left;
-      var my = e.clientY - rect.top;
-      var delta = e.deltaY < 0 ? 1.12 : 0.89;
-      var newScale = clamp(scale * delta, minScale, maxScale);
-      tx = mx - (mx - tx) * newScale / scale;
-      ty = my - (my - ty) * newScale / scale;
+      var mx = e.clientX - rect.left - wW/2;
+      var my = e.clientY - rect.top  - wH/2;
+      var delta = e.deltaY > 0 ? 0.88 : 1.14;
+      var newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * delta));
+      var ratio = newScale / scale;
+      tx = mx - ratio * (mx - tx);
+      ty = my - ratio * (my - ty);
       scale = newScale;
-      apply();
+      if (scale <= 1.01) {{ scale=1; tx=0; ty=0; }}
+      clampPan();
+      applyTransform();
     }}, {{passive:false}});
 
+    var wW = wrap.offsetWidth, wH = 0;
+
+    // Drag to pan
     wrap.addEventListener('mousedown', function(e) {{
-      if (scale <= 1) return;
-      dragging = true; startX = e.clientX; startY = e.clientY;
+      if (scale <= 1.01) return;
+      dragging = true;
+      startX = e.clientX; startY = e.clientY;
       startTx = tx; startTy = ty;
       wrap.style.cursor = 'grabbing';
       e.preventDefault();
@@ -1272,110 +1402,61 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
       if (!dragging) return;
       tx = startTx + (e.clientX - startX);
       ty = startTy + (e.clientY - startY);
-      apply();
+      clampPan();
+      applyTransform();
     }});
     document.addEventListener('mouseup', function() {{
-      dragging = false; apply();
+      if (dragging) {{ dragging=false; wrap.style.cursor='crosshair'; }}
     }});
 
-    // double-click zoom
+    // Double-click zoom toggle
     wrap.addEventListener('dblclick', function(e) {{
-      var rect = wrap.getBoundingClientRect();
-      var mx = e.clientX - rect.left;
-      var my = e.clientY - rect.top;
-      if (scale < 2.5) {{
-        var ns = clamp(scale * 2.2, minScale, maxScale);
-        tx = mx - (mx - tx) * ns / scale;
-        ty = my - (my - ty) * ns / scale;
-        scale = ns;
-      }} else {{
-        scale = 1; tx = 0; ty = 0;
+      e.preventDefault();
+      if (scale > 1.5) {{ scale=1; tx=0; ty=0; }}
+      else {{
+        var rect = wrap.getBoundingClientRect();
+        var mx = e.clientX - rect.left - wrap.offsetWidth/2;
+        var my = e.clientY - rect.top  - wrap.offsetHeight/2;
+        var newScale = 2.5;
+        var ratio = newScale / scale;
+        tx = mx - ratio * (mx - tx);
+        ty = my - ratio * (my - ty);
+        scale = newScale;
+        clampPan();
       }}
-      apply();
+      applyTransform();
     }});
 
-    wrap._resetZoom = function() {{ scale = 1; tx = 0; ty = 0; apply(); }};
-  }}
-
-  wrapIds.forEach(initZoom);
-
-  window.resetZoom = function(id) {{
-    var w = document.getElementById(id);
-    if (w && w._resetZoom) w._resetZoom();
-  }};
+    // Reset button
+    if (resetBtn) {{
+      resetBtn.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        scale=1; tx=0; ty=0;
+        applyTransform();
+      }});
+      wrap.addEventListener('mouseover', function() {{ if (scale>1.05||Math.abs(tx)>5||Math.abs(ty)>5) resetBtn.style.display='block'; }});
+      wrap.addEventListener('mouseout',  function() {{ resetBtn.style.display='none'; }});
+    }}
+  }});
 }})();
-
-// ── FAKE LIVE OI / FUNDING RATE ──────────────────────────────────────
-(function() {{
-  var oi     = 2840000000;
-  var oiChg  = 1.2;
-  var fund   = 0.0082;
-  var longR  = 52.3;
-  var liq1h  = 4100000;
-
-  function fmtB(n) {{
-    if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
-    return '$' + (n/1e6).toFixed(0) + 'M';
-  }}
-  function fmtM(n) {{
-    if (n >= 1e6) return '$' + (n/1e6).toFixed(1) + 'M';
-    return '$' + (n/1e3).toFixed(0) + 'K';
-  }}
-  function el(id) {{
-    try {{ return window.top.document.getElementById(id)||document.getElementById(id); }} catch(e) {{ return document.getElementById(id); }}
-  }}
-  function setColor(elem, val, posCol, negCol) {{
-    if (!elem) return;
-    elem.style.color = val >= 0 ? posCol : negCol;
-    elem.style.textShadow = '0 0 8px ' + (val >= 0 ? posCol : negCol) + '55';
-  }}
-
-  function tick() {{
-    oi    += (Math.random()-0.47)*8000000;
-    oiChg += (Math.random()-0.5)*0.08;
-    fund  += (Math.random()-0.5)*0.0003;
-    longR += (Math.random()-0.5)*0.15;
-    liq1h += (Math.random()-0.45)*50000;
-
-    oiChg = Math.max(-5, Math.min(5, oiChg));
-    fund  = Math.max(-0.05, Math.min(0.05, fund));
-    longR = Math.max(35, Math.min(65, longR));
-    liq1h = Math.max(500000, liq1h);
-    var shortR = 100 - longR;
-
-    var oiEl   = el('lm-oi');
-    var oicEl  = el('lm-oi-chg');
-    var fundEl = el('lm-fund');
-    var longEl = el('lm-long');
-    var shrtEl = el('lm-short');
-    var liqEl  = el('lm-liq');
-
-    if (oiEl)   oiEl.textContent   = fmtB(oi);
-    if (oicEl)  {{ oicEl.textContent = (oiChg>=0?'+':'')+oiChg.toFixed(2)+'%'; setColor(oicEl, oiChg,'#34d399','#f87171'); }}
-    if (fundEl) {{ fundEl.textContent = fund.toFixed(4)+'%'; setColor(fundEl, fund,'#fbbf24','#f87171'); fundEl.style.color = Math.abs(fund)<0.005?'#fbbf24':fund>0?'#f87171':'#34d399'; }}
-    if (longEl) {{ longEl.textContent = longR.toFixed(1)+'%'; setColor(longEl, longR-50,'#34d399','#f87171'); }}
-    if (shrtEl) {{ shrtEl.textContent = shortR.toFixed(1)+'%'; setColor(shrtEl, -(shortR-50),'#34d399','#f87171'); }}
-    if (liqEl)  liqEl.textContent  = fmtM(liq1h);
-  }}
-
-  setInterval(tick, 1200);
-}})();
-
-// ── ENTER-TO-SUBMIT ───────────────────────────────────────────────────
+// ── Enter-to-submit for chat inputs
 (function() {{
   function hookEnterKeys() {{
     function attachToDoc(doc) {{
       doc.addEventListener('keydown', function(e) {{
         if (e.key !== 'Enter' || e.shiftKey) return;
         var active = doc.activeElement;
-        if (!active || active.tagName !== 'INPUT') return;
+        if (!active) return;
+        if (active.tagName !== 'INPUT') return;
         var el = active;
         for (var i = 0; i < 10 && el; i++) {{
           var btns = el.querySelectorAll ? el.querySelectorAll('button') : [];
           for (var j = 0; j < btns.length; j++) {{
             var txt = btns[j].textContent.trim().toLowerCase();
-            if (txt.includes('ask')||txt.includes('→')||txt.includes('send')||txt.includes('continue')||txt.includes('sign in')) {{
-              e.preventDefault(); btns[j].click(); return;
+            if (txt.includes('ask') || txt.includes('→') || txt.includes('send') || txt.includes('continue') || txt.includes('sign in')) {{
+              e.preventDefault();
+              btns[j].click();
+              return;
             }}
           }}
           el = el.parentElement;
@@ -1456,38 +1537,60 @@ function setUI(state) {{
 
 function pickVoice() {{
   var voices = synth.getVoices();
-  if (!voices || !voices.length) return null;
+  if (!voices || voices.length === 0) return null;
 
-  // Explicitly female voices by exact name (most common across OS/browser)
-  var femaleNames = [
-    'Samantha','Karen','Moira','Fiona','Tessa','Veena','Nicky',
-    'Allison','Ava','Susan','Victoria','Zoe','Zira','Linda',
-    'Google US English','Google UK English Female',
-    'Microsoft Zira','Microsoft Eva','Microsoft Linda',
-    'en-US-AriaNeural','Aria','Jenny','Emma','Michelle'
+  // TIER 1: Exact match known female voices (Windows, macOS, iOS, Android, Chrome)
+  var FEMALE_EXACT = [
+    'Microsoft Zira Desktop','Microsoft Zira','Zira',         // Windows US female
+    'Microsoft Aria Online (Natural)','Microsoft Aria','Aria', // Win11 neural female
+    'Microsoft Jenny Online (Natural)','Microsoft Jenny','Jenny', // Win neural female
+    'Microsoft Emma Online (Natural)','Microsoft Emma','Emma', // UK female
+    'Samantha','Samantha (Enhanced)',                          // macOS US female
+    'Karen','Karen (Enhanced)',                                // macOS AU female
+    'Moira','Moira (Enhanced)',                                // macOS IE female
+    'Fiona','Fiona (Enhanced)',                                // macOS Scots female
+    'Tessa','Tessa (Enhanced)',                                // macOS ZA female
+    'Victoria','Ava','Ava (Enhanced)','Allison','Susan',       // macOS US females
+    'Nicky','Serena','Sangeeta','Veena',                       // macOS more females
+    'Google UK English Female','Google US English',            // Chrome TTS females
+    'en-US-Standard-C','en-US-Standard-E','en-US-Wavenet-C',  // Google WaveNet females
+    'en-US-Neural2-C','en-US-Neural2-E','en-US-Neural2-F',
   ];
-  for (var i = 0; i < femaleNames.length; i++) {{
-    var v = voices.find(function(vv) {{ return vv.name === femaleNames[i]; }});
-    if (v) return v;
+
+  for (var i = 0; i < FEMALE_EXACT.length; i++) {{
+    var match = voices.find(function(v) {{ return v.name === FEMALE_EXACT[i]; }});
+    if (match) return match;
   }}
-  // Partial match on female-indicating keywords
-  var femaleKw = ['female','woman','girl','aria','zira','ava','emma','jenny','samantha','karen'];
-  for (var k = 0; k < femaleKw.length; k++) {{
-    var v2 = voices.find(function(vv) {{ return vv.name.toLowerCase().indexOf(femaleKw[k]) >= 0; }});
-    if (v2) return v2;
+
+  // TIER 2: Name contains female keywords
+  var FEMALE_KW = ['female','woman','girl','femenino','femme','zira','aria','emma',
+    'jenny','karen','samantha','ava','allison','victoria','serena','nicky','moira',
+    'fiona','tessa','veena','sangeeta','roza','paulina','luciana'];
+  for (var j = 0; j < FEMALE_KW.length; j++) {{
+    var kw = FEMALE_KW[j];
+    var kv = voices.find(function(v) {{ return v.name.toLowerCase().indexOf(kw) >= 0; }});
+    if (kv) return kv;
   }}
-  // Avoid known male voices
-  var maleNames = ['Alex','Tom','Daniel','Fred','Ralph','Bruce','Junior','Albert',
-    'Microsoft David','Microsoft Mark','Google UK English Male'];
-  var filtered = voices.filter(function(vv) {{
-    var n = vv.name.toLowerCase();
-    return maleNames.every(function(m) {{ return vv.name !== m && n.indexOf('male') < 0; }});
+
+  // TIER 3: Filter out known male voices, pick best remaining en-US
+  var MALE_NAMES = ['Alex','David','Daniel','Tom','Fred','Ralph','Bruce','Junior',
+    'Albert','Boing','Bubbles','Cellos','Deranged','Hysterical','Organ','Trinoids',
+    'Whisper','Zarvox','Google UK English Male','Microsoft David','Microsoft Mark',
+    'Microsoft James','en-US-Standard-B','en-US-Standard-D','en-US-Wavenet-B',
+    'en-US-Wavenet-D','en-GB-Standard-B','en-GB-Standard-D'];
+  var notMale = voices.filter(function(v) {{
+    return !MALE_NAMES.some(function(m) {{ return v.name.indexOf(m) >= 0; }});
   }});
-  // Prefer US English from filtered
-  var usEn = filtered.find(function(vv) {{ return vv.lang === 'en-US' && vv.localService; }});
-  if (usEn) return usEn;
-  var anyEn = filtered.find(function(vv) {{ return vv.lang && vv.lang.startsWith('en'); }});
-  if (anyEn) return anyEn;
+
+  // Among non-male: prefer en-US local, then any en-US, then any en
+  var local = notMale.find(function(v) {{ return v.lang === 'en-US' && v.localService; }});
+  if (local) return local;
+  var anyUS = notMale.find(function(v) {{ return v.lang === 'en-US'; }});
+  if (anyUS) return anyUS;
+  var anyEN = notMale.find(function(v) {{ return v.lang && v.lang.startsWith('en'); }});
+  if (anyEN) return anyEN;
+  if (notMale.length > 0) return notMale[0];
+
   return voices[0];
 }}
 
@@ -1536,8 +1639,8 @@ function speak() {{
       var sentence = sentences[idx++].trim();
       if (!sentence) {{ next(); return; }}
       var u = new SpeechSynthesisUtterance(sentence);
-      u.rate  = 0.85;
-      u.pitch = 1.08;
+      u.rate  = 0.88;
+      u.pitch = 1.22;
       u.volume = 1.0;
       var v = pickVoice();
       if (v) u.voice = v;
