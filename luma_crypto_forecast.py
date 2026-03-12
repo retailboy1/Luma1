@@ -10,10 +10,178 @@ import requests
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 EST = ZoneInfo("America/New_York")
-import time, base64, os, json
+import time, base64, os, json, csv, pathlib, hashlib
+
+# ─────────────────────────────────────────────────────────────────────
+#  FORECAST LOG — persists every AI forecast to CSV for backtesting
+# ─────────────────────────────────────────────────────────────────────
+LOG_DIR  = pathlib.Path(os.path.expanduser("~/luma_logs"))
+LOG_FILE = LOG_DIR / "luma_forecasts.csv"
+CHAT_LOG_FILE = LOG_DIR / "luma_chat_log.csv"
+LOG_COLS = ["logged_at_utc","symbol","timeframe","asset_class",
+            "price_at_forecast","forecast_target","forecast_pct",
+            "ai_model","bars_forecast","support","resistance",
+            "rsi","ema_stack","volume_trend","bias","confidence",
+            "openrouter_raw","chronos_raw"]
+CHAT_COLS = ["logged_at_utc","symbol","question","loma_reply","has_forecast_data"]
+
+def _ensure_log():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    if not LOG_FILE.exists():
+        with open(LOG_FILE, "w", newline="") as f:
+            csv.writer(f).writerow(LOG_COLS)
+    if not CHAT_LOG_FILE.exists():
+        with open(CHAT_LOG_FILE, "w", newline="") as f:
+            csv.writer(f).writerow(CHAT_COLS)
+
+def log_forecast(symbol, tf, asset_class, price, fc_target, ai_model,
+                 bars, t_dict, bias, confidence,
+                 openrouter_raw="", chronos_raw=""):
+    """Append one forecast row to the CSV log."""
+    try:
+        _ensure_log()
+        fc_pct = (fc_target - price) / max(price, 0.00001) * 100
+        row = [
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            symbol, tf, asset_class,
+            round(price, 8), round(fc_target, 8), round(fc_pct, 4),
+            ai_model, bars,
+            round(t_dict.get("support", 0), 8),
+            round(t_dict.get("resistance", 0), 8),
+            round(t_dict.get("rsi", 50), 2),
+            ("BULLISH" if t_dict.get("ema9",0)>t_dict.get("ema21",0)>t_dict.get("ema50",0)
+             else "BEARISH" if t_dict.get("ema9",0)<t_dict.get("ema21",0)<t_dict.get("ema50",0)
+             else "MIXED"),
+            t_dict.get("vol_trend", "unknown"),
+            bias, confidence,
+            str(openrouter_raw)[:300], str(chronos_raw)[:300],
+        ]
+        with open(LOG_FILE, "a", newline="") as f:
+            csv.writer(f).writerow(row)
+    except Exception:
+        pass  # Never crash the app over logging
+
+def log_chat(symbol, question, reply, has_data):
+    """Log personal chat exchanges to private log."""
+    try:
+        _ensure_log()
+        with open(CHAT_LOG_FILE, "a", newline="") as f:
+            csv.writer(f).writerow([
+                datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                symbol, question[:500], reply[:1000], str(has_data)
+            ])
+    except Exception:
+        pass
+
+def get_log_df():
+    """Return forecast log as DataFrame (or empty)."""
+    try:
+        _ensure_log()
+        df = pd.read_csv(LOG_FILE)
+        return df
+    except:
+        return pd.DataFrame(columns=LOG_COLS)
+
+def get_chat_log_df():
+    """Return chat log as DataFrame (or empty)."""
+    try:
+        _ensure_log()
+        df = pd.read_csv(CHAT_LOG_FILE)
+        return df
+    except:
+        return pd.DataFrame(columns=CHAT_COLS)
+
+# ─────────────────────────────────────────────────────────────────────
+#  MARSILEA HEATMAP — renders a professional static heatmap as image
+# ─────────────────────────────────────────────────────────────────────
+def render_marsilea_heatmap(df_raw, symbol, tf_label):
+    """Build a Marsilea composite heatmap: price-level × time, vol-weighted.
+    Returns base64 PNG string, or None on failure."""
+    try:
+        import marsilea as ma
+        import marsilea.plotter as mp
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.colors as mcolors
+        import io
+
+        sn = min(80, len(df_raw))
+        df = df_raw.iloc[-sn:].copy()
+        closes = df["Close"].values
+        highs  = df["High"].values
+        lows   = df["Low"].values
+        vols   = df["Volume"].values if "Volume" in df.columns else np.ones(sn)
+        vols   = np.where(np.isnan(vols) | (vols <= 0), 1.0, vols)
+
+        p_min, p_max = lows.min() * 0.997, highs.max() * 1.003
+        n_bins = 40
+        price_bins = np.linspace(p_min, p_max, n_bins + 1)
+        heat = np.zeros((n_bins, sn))
+        for ti in range(sn):
+            h, l = highs[ti], lows[ti]
+            vol_w = float(vols[ti])
+            for bi in range(n_bins):
+                bl, bh = price_bins[bi], price_bins[bi+1]
+                overlap = max(0.0, min(h, bh) - max(l, bl))
+                cr = max(h - l, 1e-10)
+                heat[bi, ti] = (overlap / cr) * vol_w
+        # Normalize rows
+        row_max = heat.max(axis=1, keepdims=True)
+        row_max[row_max == 0] = 1.0
+        heat = heat / row_max
+        # Flip so high prices at top
+        heat = heat[::-1]
+
+        price_labels = [f"${(price_bins[n_bins-i-1]+price_bins[n_bins-i])/2:,.0f}"
+                        for i in range(n_bins)]
+
+        dates_strs = [str(d)[:10] for d in df.index]
+        # Thin date labels: show every Nth
+        step = max(1, sn // 8)
+        col_labels = [dates_strs[i] if i % step == 0 else "" for i in range(sn)]
+
+        cmap = mcolors.LinearSegmentedColormap.from_list(
+            "luma_heat",
+            ["#050a14","#0a1628","#1e3a5f","#7c2d12","#dc2626","#fbbf24"],
+            N=256
+        )
+
+        h_board = ma.Heatmap(
+            heat,
+            cmap=cmap,
+            label="Liquidity",
+        )
+
+        # Volume bar on top
+        vol_norm = vols / vols.max()
+        h_board.add_top(mp.Bar(vol_norm, color="#38bdf8", label="Volume"), size=0.18)
+
+        # Price close line on right side annotation
+        price_norm = (closes - closes.min()) / max(closes.max() - closes.min(), 1e-10)
+        h_board.add_bottom(mp.Bar(price_norm, color="#a78bfa", label="Close"), size=0.18)
+
+        # Labels
+        h_board.add_left(mp.Labels(price_labels, fontsize=5.5))
+        h_board.add_bottom(mp.Labels(col_labels, rotation=45, fontsize=5.5))
+
+        fig_ma = plt.figure(figsize=(12, 5), facecolor="#070a12")
+        h_board.render(figure=fig_ma)
+        fig_ma.suptitle(f"🔥 Liquidity Heatmap — {symbol} {tf_label}",
+                        color="#f1f5f9", fontsize=10, fontweight="bold", x=0.02, ha="left")
+
+        buf = io.BytesIO()
+        fig_ma.savefig(buf, format="png", dpi=110, bbox_inches="tight",
+                       facecolor="#070a12", edgecolor="none")
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode()
+        plt.close(fig_ma)
+        return b64
+    except Exception as e:
+        return None
 
 # ─────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="LOMA", page_icon="🌙", layout="wide",
@@ -99,8 +267,70 @@ TOP_COINS = [
     ("Waves","WAVESUSDT"),("Monero","XMRUSDT"),("EOS","EOSUSDT"),
     ("TEZOS","XTZUSDT"),("Horizen","ZENUSDT"),("Icon","ICXUSDT"),
     ("Lisk","LSKUSDT"),("NEM","XEMUST"),("Nano","NANOUSDT"),
+    # Additional top coins
+    ("TON","TONUSDT"),("Kaspa","KASUSDT"),("Render Token","RENDERUSDT"),
+    ("Pendle","PENDLEUSDT"),("Notcoin","NOTUSDT"),("Dogs","DOGSUSDT"),
+    ("Hamster Kombat","HMSTRUSDT"),("Cati","CATIUSDT"),("Grass","GRASSUSDT"),
+    ("Eigen Layer","EIGENUSDT"),("IO.net","IOUSDT"),("Zeta Chain","ZETAUSDT"),
+    ("Saga","SAGAUSDT"),("Wormhole","WUSDT"),("deBridge","DBRUSDT"),
+    ("Berachain","BERUSDT"),("Sonic","SUSDT"),("Hyperliquid","HYPEUSDT"),
+    ("aixbt","AIXBTUSDT"),("Virtuals","VIRTUALUSDT"),("ai16z","AI16ZUSDT"),
+    ("Story","IPUSDT"),("Movement","MOVEUSDT"),("Monad",""),
+    # Futures/Traditional (special asset class — fetched via Yahoo Finance)
+    ("── FUTURES & ETFs ──","__divider__"),
+    ("NQ Futures (Nasdaq)","__NQ__"),
+    ("Gold Futures","__GC__"),
+    ("Silver Futures","__SI__"),
+    ("QQQ ETF","__QQQ__"),
     ("Custom…","__custom__"),
 ]
+
+# Futures symbols map to Yahoo Finance tickers
+FUTURES_SYMBOLS = {
+    "__NQ__":  ("NQ=F",  "NQ Futures",  "futures"),
+    "__GC__":  ("GC=F",  "Gold Futures","futures"),
+    "__SI__":  ("SI=F",  "Silver Futures","futures"),
+    "__QQQ__": ("QQQ",   "QQQ ETF",     "etf"),
+}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_yahoo(ticker_sym: str, interval: str = "1h", period: str = "60d"):
+    """Fetch OHLCV from Yahoo Finance (for NQ, Gold, Silver, QQQ)."""
+    # Map our intervals to Yahoo Finance intervals
+    interval_map = {
+        "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+        "1h": "1h", "4h": "1h",  # Yahoo doesn't have 4h; use 1h
+        "1d": "1d", "1w": "1wk", "2d": "1d", "2w": "1d", "1mo": "1mo",
+    }
+    period_map = {
+        "1m": "7d", "5m": "60d", "15m": "60d", "30m": "60d",
+        "1h": "730d", "4h": "730d", "1d": "max",
+        "1w": "max", "2d": "max", "2w": "max", "1mo": "max",
+    }
+    yf_interval = interval_map.get(interval, "1d")
+    yf_period   = period_map.get(interval, "730d")
+    try:
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_sym}"
+               f"?interval={yf_interval}&range={yf_period}&includePrePost=false")
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        result = data["chart"]["result"][0]
+        ts     = result["timestamp"]
+        ohlcv  = result["indicators"]["quote"][0]
+        df = pd.DataFrame({
+            "ts":     pd.to_datetime(ts, unit="s", utc=True),
+            "Open":   ohlcv["open"],
+            "High":   ohlcv["high"],
+            "Low":    ohlcv["low"],
+            "Close":  ohlcv["close"],
+            "Volume": ohlcv.get("volume", [0]*len(ts)),
+        }).dropna(subset=["Close"])
+        df = df.set_index("ts").sort_index()
+        return df
+    except Exception as e:
+        raise ValueError(f"Yahoo Finance fetch failed for {ticker_sym}: {e}")
 
 COIN_NAME_TO_SYMBOL = {name.upper(): sym for name,sym in TOP_COINS if sym!="__custom__"}
 COIN_SYM_TO_NAME    = {sym: name for name,sym in TOP_COINS if sym!="__custom__"}
@@ -160,11 +390,24 @@ def normalize_symbol(raw: str) -> str:
 #  BINANCE.US DATA
 # ─────────────────────────────────────────────────────────────────────
 BINANCE          = "https://api.binance.us"
-INTERVAL_MINUTES = {"1m":1,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440}
-INTERVAL_MAX_DAYS= {"1m":3,"5m":45,"15m":90,"30m":180,"1h":365,"4h":730,"1d":2000}
+INTERVAL_MINUTES = {"1m":1,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440,
+                    "2d":2880,"1w":10080,"2w":20160,"1mo":43200}
+INTERVAL_MAX_DAYS= {"1m":3,"5m":45,"15m":90,"30m":180,"1h":365,"4h":730,"1d":2000,
+                    "2d":2000,"1w":2000,"2w":2000,"1mo":2000}
+# Binance-native intervals (others must be resampled from 1d)
+BINANCE_INTERVALS = {"1m","5m","15m","30m","1h","4h","1d"}
 
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_binance(symbol, interval, days_back):
+    # For extended intervals not supported natively by Binance, resample from 1d
+    if interval not in BINANCE_INTERVALS:
+        df_1d = fetch_binance(symbol, "1d", days_back)
+        rule_map = {"2d":"2D","1w":"W","2w":"2W","1mo":"ME"}
+        rule = rule_map.get(interval, "W")
+        df = df_1d.resample(rule).agg({
+            "Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"
+        }).dropna()
+        return df
     url  = f"{BINANCE}/api/v3/klines"
     mins = INTERVAL_MINUTES[interval]
     want = min(int(days_back*1440/mins), 4000)
@@ -289,6 +532,44 @@ def load_model():
         return m, None
     except Exception as e:
         return None, str(e)
+
+@st.cache_resource(show_spinner=False)
+def load_chronos():
+    """Load Amazon Chronos-2 (chronos-t5-base) for dual-AI ensemble forecasting."""
+    try:
+        from chronos import BaseChronosPipeline
+        import torch
+        pipeline = BaseChronosPipeline.from_pretrained(
+            "amazon/chronos-t5-base",
+            device_map="cpu",
+            torch_dtype=torch.float32,
+        )
+        return pipeline, None
+    except Exception as e:
+        # Try smaller model if base fails
+        try:
+            from chronos import BaseChronosPipeline
+            import torch
+            pipeline = BaseChronosPipeline.from_pretrained(
+                "amazon/chronos-t5-tiny",
+                device_map="cpu",
+                torch_dtype=torch.float32,
+            )
+            return pipeline, None
+        except Exception as e2:
+            return None, str(e2)
+
+def chronos_forecast(pipeline, prices: list, horizon: int) -> np.ndarray:
+    """Run Chronos-2 inference and return forecast array."""
+    try:
+        import torch
+        ctx = torch.tensor(prices[-512:], dtype=torch.float32).unsqueeze(0)
+        forecast = pipeline.predict(ctx, prediction_length=horizon)
+        # forecast shape: [1, num_samples, horizon] — take median
+        median = forecast[0].median(dim=0).values.numpy()
+        return median
+    except Exception:
+        return np.array([])
 
 # ─────────────────────────────────────────────────────────────────────
 #  AI  — multi-provider with graceful fallback
@@ -1238,171 +1519,85 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
       <span class="tts-dot" id="tts-dot"></span>
       🌙 LOMA
     </div>
-    <button class="tts-btn" id="tts-toggle-btn" onclick="lomaToggle()">◉ SPEAKING</button>
+    <button class="tts-btn" id="tts-toggle-btn" onclick="(function(){{
+      // Try to reach the TTS iframe's lomaToggle via postMessage broadcast
+      var iframes = document.querySelectorAll('iframe');
+      for(var i=0;i<iframes.length;i++){{
+        try{{ iframes[i].contentWindow.postMessage('loma-toggle','*'); }}catch(e){{}}
+      }}
+      // Also try direct call
+      try{{ window.lomaToggle && window.lomaToggle(); }}catch(e){{}}
+      try{{ window.top.lomaToggle && window.top.lomaToggle(); }}catch(e){{}}
+    }})()">◉ SPEAKING</button>
   </div>
   <div id="lv2-text" style="min-height:60px">
     {voice_paragraphs}
   </div>
 </div>
 
-<!-- LIQUIDATION HEATMAP -->
+<!-- LIQUIDATION HEATMAP — REAL INTERACTIVE HEATMAP -->
 <div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:10px">🔥 LIQUIDATION HEATMAP</div>
-  <div id="img-wrap-heatmap" style="background:#070a12;border:1px solid #111827;border-radius:8px;
-    overflow:hidden;position:relative;width:100%;cursor:crosshair;user-select:none">
-    <img id="img-heatmap"
-      src="https://app.cdnblock.com/upload/1713366001994-2.png"
-      style="width:100%;height:auto;display:block;transform-origin:center center;transition:none"
-      draggable="false" />
-    <div id="img-reset-heatmap" style="display:none;position:absolute;top:8px;right:8px;
-      background:rgba(7,10,18,.85);border:1px solid #334155;color:#94a3b8;font-size:.65rem;
-      font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
-      letter-spacing:.06em;text-transform:uppercase;z-index:10">RESET</div>
-    <div style="position:absolute;bottom:8px;right:10px;color:#1e293b;font-size:.58rem;
-      font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN · DBL-CLICK ZOOM</div>
-  </div>
+  <div class="ap-sh2" style="margin-bottom:10px">🔥 LIQUIDATION HEATMAP — Price × Time Density</div>
 </div>
+""", unsafe_allow_html=True)
 
-<!-- FOOTPRINT CHART -->
-<div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:10px">📊 ORDER FLOW FOOTPRINT</div>
-  <div id="img-wrap-footprint" style="background:#070a12;border:1px solid #111827;border-radius:8px;
-    overflow:hidden;position:relative;width:100%;cursor:crosshair;user-select:none">
-    <img id="img-footprint"
-      src="https://i.redd.it/33gffe66fwf61.png"
-      style="width:100%;height:auto;display:block;transform-origin:center center;transition:none"
-      draggable="false" />
-    <div id="img-reset-footprint" style="display:none;position:absolute;top:8px;right:8px;
-      background:rgba(7,10,18,.85);border:1px solid #334155;color:#94a3b8;font-size:.65rem;
-      font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
-      letter-spacing:.06em;text-transform:uppercase;z-index:10">RESET</div>
-    <div style="position:absolute;bottom:8px;right:10px;color:#1e293b;font-size:.58rem;
-      font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN · DBL-CLICK ZOOM</div>
-  </div>
-</div>
+    # ── Marsilea Heatmap ────────────────────────────────────────────────
+    try:
+        df_hm = raw_dfs.get(main_tf) or list(raw_dfs.values())[0]
+        hm_b64 = render_marsilea_heatmap(df_hm, sym, main_tf.upper())
+        if hm_b64:
+            st.markdown(f"""
+<div style="background:#070a12;border:1px solid #111827;border-radius:8px;overflow:hidden">
+  <img src="data:image/png;base64,{hm_b64}"
+       style="width:100%;height:auto;display:block" />
+</div>""", unsafe_allow_html=True)
+        else:
+            raise ValueError("Marsilea returned None")
+    except Exception as e:
+        # Fallback: Plotly heatmap
+        try:
+            df_hm = raw_dfs.get(main_tf) or list(raw_dfs.values())[0]
+            sn_hm = min(60, len(df_hm))
+            prices_hm = df_hm["Close"].iloc[-sn_hm:].values
+            dates_hm  = df_hm.index[-sn_hm:]
+            p_min, p_max = prices_hm.min() * 0.995, prices_hm.max() * 1.005
+            n_bins = 50
+            price_bins = np.linspace(p_min, p_max, n_bins)
+            heat_matrix = np.zeros((n_bins-1, sn_hm))
+            for ti, (p, h, l) in enumerate(zip(
+                df_hm["Close"].iloc[-sn_hm:].values,
+                df_hm["High"].iloc[-sn_hm:].values,
+                df_hm["Low"].iloc[-sn_hm:].values
+            )):
+                vol_w = df_hm["Volume"].iloc[-sn_hm+ti] if "Volume" in df_hm.columns else 1.0
+                for bi in range(n_bins-1):
+                    bl, bh = price_bins[bi], price_bins[bi+1]
+                    overlap = max(0, min(h, bh) - max(l, bl))
+                    heat_matrix[bi, ti] = (overlap / max(h-l, 1e-10)) * float(vol_w)
+            hm_max = heat_matrix.max()
+            if hm_max > 0:
+                heat_matrix = heat_matrix / hm_max
+            fig_hm = go.Figure(go.Heatmap(
+                x=[str(d)[:16] for d in dates_hm],
+                y=[f"${(price_bins[i]+price_bins[i+1])/2:,.2f}" for i in range(n_bins-1)],
+                z=heat_matrix,
+                colorscale=[[0,"#050a14"],[0.2,"#0a1628"],[0.4,"#1e3a5f"],
+                             [0.6,"#7c2d12"],[0.8,"#dc2626"],[1.0,"#fbbf24"]],
+                showscale=False,
+            ))
+            fig_hm.update_layout(
+                paper_bgcolor="#070a12", plot_bgcolor="#070a12",
+                font=dict(color="#94a3b8", size=9),
+                xaxis=dict(tickangle=-45, tickfont=dict(size=8)),
+                height=340, margin=dict(l=28,r=8,t=20,b=60))
+            st.plotly_chart(fig_hm, use_container_width=True)
+        except:
+            st.markdown('<div style="color:#374151;font-size:.8rem;padding:14px">Heatmap unavailable.</div>',
+                        unsafe_allow_html=True)
 
-<!-- BOOKMAP -->
-<div style="margin-bottom:14px">
-  <div class="ap-sh2" style="margin-bottom:10px">📈 BOOKMAP — ORDER BOOK DEPTH</div>
-  <div id="img-wrap-bookmap" style="background:#070a12;border:1px solid #111827;border-radius:8px;
-    overflow:hidden;position:relative;width:100%;cursor:crosshair;user-select:none">
-    <img id="img-bookmap"
-      src="https://optimusfutures.com/img/Bookmap/Bookmap-1.jpg"
-      style="width:100%;height:auto;display:block;transform-origin:center center;transition:none"
-      draggable="false" />
-    <div id="img-reset-bookmap" style="display:none;position:absolute;top:8px;right:8px;
-      background:rgba(7,10,18,.85);border:1px solid #334155;color:#94a3b8;font-size:.65rem;
-      font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
-      letter-spacing:.06em;text-transform:uppercase;z-index:10">RESET</div>
-    <div style="position:absolute;bottom:8px;right:10px;color:#1e293b;font-size:.58rem;
-      font-family:'IBM Plex Mono',monospace;letter-spacing:.06em">SCROLL TO ZOOM · DRAG TO PAN · DBL-CLICK ZOOM</div>
-  </div>
-</div>
-
-</div>
+    st.markdown("""</div>
 
 <script>
-// ── ZOOMABLE / PANNABLE IMAGE HANDLER ────────────────────────────────
-(function() {{
-  var configs = [
-    {{ wrapId:'img-wrap-heatmap',   imgId:'img-heatmap',   resetId:'img-reset-heatmap'   }},
-    {{ wrapId:'img-wrap-footprint', imgId:'img-footprint', resetId:'img-reset-footprint' }},
-    {{ wrapId:'img-wrap-bookmap',   imgId:'img-bookmap',   resetId:'img-reset-bookmap'   }},
-  ];
-
-  configs.forEach(function(cfg) {{
-    var wrap  = document.getElementById(cfg.wrapId);
-    var img   = document.getElementById(cfg.imgId);
-    var resetBtn = document.getElementById(cfg.resetId);
-    if (!wrap || !img) return;
-
-    var scale = 1, tx = 0, ty = 0;
-    var dragging = false, startX = 0, startY = 0, startTx = 0, startTy = 0;
-    var MAX_SCALE = 6, MIN_SCALE = 1;
-
-    function applyTransform() {{
-      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
-      if (resetBtn) resetBtn.style.display = (scale > 1.05 || Math.abs(tx) > 5 || Math.abs(ty) > 5) ? 'block' : 'none';
-    }}
-
-    function clampPan() {{
-      var wW = wrap.offsetWidth, wH = wrap.offsetHeight;
-      var iW = wW * scale, iH = wH * scale;
-      var maxTx = Math.max(0, (iW - wW) / 2);
-      var maxTy = Math.max(0, (iH - wH) / 2);
-      tx = Math.max(-maxTx, Math.min(maxTx, tx));
-      ty = Math.max(-maxTy, Math.min(maxTy, ty));
-    }}
-
-    // Scroll to zoom
-    wrap.addEventListener('wheel', function(e) {{
-      e.preventDefault();
-      var rect = wrap.getBoundingClientRect();
-      var mx = e.clientX - rect.left - wW/2;
-      var my = e.clientY - rect.top  - wH/2;
-      var delta = e.deltaY > 0 ? 0.88 : 1.14;
-      var newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * delta));
-      var ratio = newScale / scale;
-      tx = mx - ratio * (mx - tx);
-      ty = my - ratio * (my - ty);
-      scale = newScale;
-      if (scale <= 1.01) {{ scale=1; tx=0; ty=0; }}
-      clampPan();
-      applyTransform();
-    }}, {{passive:false}});
-
-    var wW = wrap.offsetWidth, wH = 0;
-
-    // Drag to pan
-    wrap.addEventListener('mousedown', function(e) {{
-      if (scale <= 1.01) return;
-      dragging = true;
-      startX = e.clientX; startY = e.clientY;
-      startTx = tx; startTy = ty;
-      wrap.style.cursor = 'grabbing';
-      e.preventDefault();
-    }});
-    document.addEventListener('mousemove', function(e) {{
-      if (!dragging) return;
-      tx = startTx + (e.clientX - startX);
-      ty = startTy + (e.clientY - startY);
-      clampPan();
-      applyTransform();
-    }});
-    document.addEventListener('mouseup', function() {{
-      if (dragging) {{ dragging=false; wrap.style.cursor='crosshair'; }}
-    }});
-
-    // Double-click zoom toggle
-    wrap.addEventListener('dblclick', function(e) {{
-      e.preventDefault();
-      if (scale > 1.5) {{ scale=1; tx=0; ty=0; }}
-      else {{
-        var rect = wrap.getBoundingClientRect();
-        var mx = e.clientX - rect.left - wrap.offsetWidth/2;
-        var my = e.clientY - rect.top  - wrap.offsetHeight/2;
-        var newScale = 2.5;
-        var ratio = newScale / scale;
-        tx = mx - ratio * (mx - tx);
-        ty = my - ratio * (my - ty);
-        scale = newScale;
-        clampPan();
-      }}
-      applyTransform();
-    }});
-
-    // Reset button
-    if (resetBtn) {{
-      resetBtn.addEventListener('click', function(e) {{
-        e.stopPropagation();
-        scale=1; tx=0; ty=0;
-        applyTransform();
-      }});
-      wrap.addEventListener('mouseover', function() {{ if (scale>1.05||Math.abs(tx)>5||Math.abs(ty)>5) resetBtn.style.display='block'; }});
-      wrap.addEventListener('mouseout',  function() {{ resetBtn.style.display='none'; }});
-    }}
-  }});
-}})();
 // ── Enter-to-submit for chat inputs
 (function() {{
   function hookEnterKeys() {{
@@ -1439,78 +1634,69 @@ def _render_analysis_panel(sym, summaries, raw_dfs, voice_text):
 
 def _inject_tts(voice_text):
     """
-    TTS — flirty female voice.
-    Reads: greeting/joke, ~30% of non-trade paragraphs, flirty sign-off.
-    Skips paragraphs dense with dollar amounts and trade numbers.
+    TTS — flirty female voice. Injects a self-contained iframe with
+    play/mute controls that communicate via localStorage events so the
+    inline button in the analysis panel can toggle it.
     """
     import re as _re
 
     all_paras = [p.strip() for p in voice_text.split('\n') if p.strip()]
 
     def _is_trade_numbers(p):
-        # Skip paragraphs that are mostly dollar figures / trade instructions
         dollar_count = len(_re.findall(r'\$[\d,]+', p))
         return dollar_count >= 3
 
-    # Always keep opener (first para), filter trades, sample 30% of rest
     spoken = []
     if all_paras:
-        spoken.append(all_paras[0])  # greeting always
+        spoken.append(all_paras[0])
     rest = [p for p in all_paras[1:] if not _is_trade_numbers(p)]
-    # Take ~30% — minimum 2, max 4
     import math as _math
     n_take = min(4, max(2, _math.ceil(len(rest) * 0.30)))
-    # Pick evenly spaced so we get a good cross-section
     if rest:
         step = max(1, len(rest) // n_take)
         for i in range(0, min(len(rest), n_take * step), step):
             spoken.append(rest[i])
 
-    # Flirty closing
     spoken.append(
-        "Anyway Nancy... that's what I see right now. "
-        "If you have any questions, you know where to find me — just type below. "
-        "I'll be here. Always."
+        "Anyway Nancy... that's my full read for now. "
+        "If you have questions, I'm right below. Always watching."
     )
 
     spoken_text = ' '.join(spoken)
-
     safe = (spoken_text
-            .replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("'", "\\'")
-            .replace("\n", " ")
-            .replace("\r", "")
-            .replace("$", "dollar ")
-            .replace("%", " percent")
-            .replace("→", "to")
-            .replace("▲", "up")
-            .replace("▼", "down")
-            .replace("**", "")
-            .replace("*", ""))
+            .replace("\\", "\\\\").replace("`", "'").replace('"', '\\"')
+            .replace("'", "\\'").replace("\n", " ").replace("\r", "")
+            .replace("$", "dollar ").replace("%", " percent")
+            .replace("→", "to").replace("▲", "up").replace("▼", "down")
+            .replace("**", "").replace("*", ""))
 
-    st_components.html(f"""
-<!DOCTYPE html>
-<html>
-<head><style>
-  body{{margin:0;padding:0;background:transparent;overflow:hidden}}
-  #loma-tts-btn{{
-    background:linear-gradient(135deg,rgba(0,255,136,.18),rgba(0,180,100,.1));
-    border:1px solid rgba(0,255,136,.5);
-    color:#00ff88;font-size:12px;font-weight:800;letter-spacing:.14em;
-    padding:9px 18px;border-radius:4px;cursor:pointer;
-    font-family:'IBM Plex Mono',monospace;text-transform:uppercase;
-    display:block;width:100%;box-sizing:border-box;
-    box-shadow:0 0 18px rgba(0,255,136,.15);
-    transition:all .2s;
-  }}
-  #loma-tts-btn:hover{{box-shadow:0 0 32px rgba(0,255,136,.35)}}
-  #loma-tts-btn.off{{background:rgba(30,41,59,.4);border-color:rgba(100,116,139,.3);color:#475569;box-shadow:none}}
-  #status{{color:#1e3a1e;font-size:10px;margin-top:3px;font-family:'IBM Plex Mono',monospace;text-align:center;letter-spacing:.08em}}
-</style></head>
-<body>
-<button id="loma-tts-btn" onclick="lomaToggle()">◉ LOMA SPEAKING…</button>
-<div id="status">VOICE ACTIVE</div>
+    st_components.html(f"""<!DOCTYPE html><html><head>
+<style>
+body{{margin:0;padding:4px;background:transparent;overflow:hidden}}
+#tts-ctrl{{
+  display:flex;align-items:center;gap:10px;
+  background:linear-gradient(135deg,rgba(0,255,136,.12),rgba(0,180,100,.07));
+  border:1px solid rgba(0,255,136,.35);border-radius:6px;
+  padding:8px 14px;cursor:pointer;width:100%;box-sizing:border-box;
+  transition:all .2s;
+}}
+#tts-ctrl:hover{{background:linear-gradient(135deg,rgba(0,255,136,.22),rgba(0,180,100,.14))}}
+#tts-ctrl.off{{background:rgba(30,41,59,.35);border-color:rgba(100,116,139,.25)}}
+#tts-dot{{width:8px;height:8px;border-radius:50%;background:#34d399;
+  animation:dp 1.1s ease-in-out infinite;flex-shrink:0}}
+@keyframes dp{{0%,100%{{opacity:.3;transform:scale(.8)}}50%{{opacity:1;transform:scale(1.15)}}}}
+#tts-dot.off{{animation:none;background:#374151}}
+#tts-lbl{{color:#00ff88;font-size:.72rem;font-weight:800;letter-spacing:.13em;
+  font-family:'IBM Plex Mono',monospace;text-transform:uppercase}}
+#tts-ctrl.off #tts-lbl{{color:#475569}}
+#tts-sub{{color:#1a5c3a;font-size:.6rem;font-family:'IBM Plex Mono',monospace;
+  letter-spacing:.07em;margin-left:auto}}
+</style></head><body>
+<div id="tts-ctrl" onclick="toggleTTS()">
+  <div id="tts-dot"></div>
+  <span id="tts-lbl">◉ LOMA SPEAKING</span>
+  <span id="tts-sub" id="tts-sub">CLICK TO MUTE</span>
+</div>
 <script>
 var TEXT = "{safe}";
 var speaking = false;
@@ -1518,134 +1704,123 @@ var muted = false;
 var synth = window.speechSynthesis;
 
 function setUI(state) {{
-  var btn = document.getElementById('loma-tts-btn');
-  var st  = document.getElementById('status');
+  var ctrl = document.getElementById('tts-ctrl');
+  var dot  = document.getElementById('tts-dot');
+  var lbl  = document.getElementById('tts-lbl');
+  var sub  = document.getElementById('tts-sub');
+  if (!ctrl) return;
   if (state === 'speaking') {{
-    btn.textContent = '◉ MUTE LOMA';
-    btn.classList.remove('off');
-    if (st) st.textContent = 'VOICE ACTIVE';
+    ctrl.classList.remove('off');
+    dot.classList.remove('off');
+    lbl.textContent = '◉ LOMA SPEAKING';
+    if (sub) sub.textContent = 'CLICK TO MUTE';
   }} else if (state === 'done') {{
-    btn.textContent = '↻ REPLAY';
-    btn.classList.add('off');
-    if (st) st.textContent = 'ANALYSIS COMPLETE';
+    ctrl.classList.add('off');
+    dot.classList.add('off');
+    lbl.textContent = '↻ REPLAY LOMA';
+    if (sub) sub.textContent = 'ANALYSIS COMPLETE';
   }} else {{
-    btn.textContent = '▶ PLAY LOMA';
-    btn.classList.add('off');
-    if (st) st.textContent = 'PAUSED';
+    ctrl.classList.add('off');
+    dot.classList.add('off');
+    lbl.textContent = '▶ PLAY LOMA';
+    if (sub) sub.textContent = 'PAUSED';
   }}
 }}
 
 function pickVoice() {{
   var voices = synth.getVoices();
-  if (!voices || voices.length === 0) return null;
-  var FEMALE_EXACT = [
-    'Microsoft Zira Desktop','Microsoft Zira','Zira',
-    'Microsoft Aria Online (Natural)','Microsoft Aria','Aria',
-    'Microsoft Jenny Online (Natural)','Microsoft Jenny','Jenny',
-    'Microsoft Emma Online (Natural)','Microsoft Emma','Emma',
-    'Samantha','Samantha (Enhanced)','Karen','Karen (Enhanced)',
-    'Moira','Moira (Enhanced)','Fiona','Fiona (Enhanced)',
-    'Tessa','Tessa (Enhanced)','Victoria','Ava','Ava (Enhanced)',
-    'Allison','Susan','Nicky','Serena','Sangeeta','Veena',
-    'Google UK English Female','Google US English',
-    'en-US-Standard-C','en-US-Standard-E','en-US-Wavenet-C',
-    'en-US-Neural2-C','en-US-Neural2-E','en-US-Neural2-F',
-  ];
-  for (var i = 0; i < FEMALE_EXACT.length; i++) {{
-    var match = voices.find(function(v) {{ return v.name === FEMALE_EXACT[i]; }});
-    if (match) return match;
+  if (!voices || !voices.length) return null;
+  var FEMALE = ['Aria','Jenny','Emma','Zira','Samantha','Karen','Ava','Allison',
+    'Victoria','Moira','Fiona','Tessa','Serena','Nicky','Google US English',
+    'Google UK English Female','en-US-Standard-C','en-US-Neural2-C'];
+  for (var i=0;i<FEMALE.length;i++) {{
+    var m=voices.find(function(v){{return v.name.indexOf(FEMALE[i])>=0;}});
+    if(m) return m;
   }}
-  var FEMALE_KW = ['female','woman','girl','zira','aria','emma','jenny','karen',
-    'samantha','ava','allison','victoria','serena','nicky','moira','fiona','tessa'];
-  for (var j = 0; j < FEMALE_KW.length; j++) {{
-    var kw = FEMALE_KW[j];
-    var kv = voices.find(function(v) {{ return v.name.toLowerCase().indexOf(kw) >= 0; }});
-    if (kv) return kv;
-  }}
-  var MALE_NAMES = ['Alex','David','Daniel','Tom','Fred','Ralph','Bruce',
-    'Google UK English Male','Microsoft David','Microsoft Mark','Microsoft James'];
-  var notMale = voices.filter(function(v) {{
-    return !MALE_NAMES.some(function(m) {{ return v.name.indexOf(m) >= 0; }});
-  }});
-  var local = notMale.find(function(v) {{ return v.lang === 'en-US' && v.localService; }});
-  if (local) return local;
-  var anyUS = notMale.find(function(v) {{ return v.lang === 'en-US'; }});
-  if (anyUS) return anyUS;
-  if (notMale.length > 0) return notMale[0];
-  return voices[0];
+  var enUS=voices.filter(function(v){{return v.lang==='en-US';}});
+  return enUS[0] || voices[0];
 }}
 
 function playBeep() {{
-  return new Promise(function(resolve) {{
+  return new Promise(function(res) {{
     try {{
-      var ctx = new (window.AudioContext || window.webkitAudioContext)();
-      var times = [0, 0.12, 0.24];
-      var freqs = [440, 554, 660];
-      times.forEach(function(t, i) {{
-        var osc = ctx.createOscillator();
-        var gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = freqs[i]; osc.type = 'sine';
-        gain.gain.setValueAtTime(0, ctx.currentTime + t);
-        gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + t + 0.02);
-        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + t + 0.09);
-        osc.start(ctx.currentTime + t); osc.stop(ctx.currentTime + t + 0.1);
+      var ctx=new (window.AudioContext||window.webkitAudioContext)();
+      [0,0.12,0.24].forEach(function(t,i) {{
+        var o=ctx.createOscillator(),g=ctx.createGain();
+        o.connect(g);g.connect(ctx.destination);
+        o.frequency.value=[440,554,660][i];o.type='sine';
+        g.gain.setValueAtTime(0,ctx.currentTime+t);
+        g.gain.linearRampToValueAtTime(0.16,ctx.currentTime+t+0.02);
+        g.gain.linearRampToValueAtTime(0,ctx.currentTime+t+0.09);
+        o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+0.11);
       }});
-      setTimeout(resolve, 500);
-    }} catch(e) {{ resolve(); }}
+      setTimeout(res,450);
+    }} catch(e) {{res();}}
   }});
 }}
 
 function speak() {{
   synth.cancel();
-  muted = false; speaking = true;
+  muted=false; speaking=true;
   setUI('speaking');
   playBeep().then(function() {{
     if (muted) return;
     var sentences = TEXT.match(/[^.!?]+[.!?]+/g) || [TEXT];
-    var idx = 0;
+    var idx=0;
     function next() {{
-      if (idx >= sentences.length || muted) {{
-        speaking = false;
+      if (idx>=sentences.length || muted) {{
+        speaking=false;
         setUI(muted ? 'stopped' : 'done');
         return;
       }}
-      var sentence = sentences[idx++].trim();
-      if (!sentence) {{ next(); return; }}
-      var u = new SpeechSynthesisUtterance(sentence);
-      u.rate = 0.88; u.pitch = 1.22; u.volume = 1.0;
-      var v = pickVoice();
-      if (v) u.voice = v;
-      u.onend = next;
-      u.onerror = function() {{ if (!muted) setTimeout(next, 100); }};
+      var s=sentences[idx++].trim();
+      if (!s) {{ next(); return; }}
+      var u=new SpeechSynthesisUtterance(s);
+      u.rate=0.88; u.pitch=1.20; u.volume=1.0;
+      var v=pickVoice(); if(v) u.voice=v;
+      u.onend=next;
+      u.onerror=function(){{ if(!muted) setTimeout(next,80); }};
       synth.speak(u);
     }}
-    var keepAlive = setInterval(function() {{
-      if (!speaking) {{ clearInterval(keepAlive); return; }}
+    // Keep-alive for Chrome which pauses after 15s
+    var ka=setInterval(function() {{
+      if (!speaking) {{ clearInterval(ka); return; }}
       synth.pause(); synth.resume();
-    }}, 10000);
+    }},10000);
     next();
   }});
 }}
 
-window.lomaToggle = function() {{
-  if (speaking) {{ muted = true; speaking = false; synth.cancel(); setUI('stopped'); }}
-  else {{ speak(); }}
-}};
+function toggleTTS() {{
+  if (speaking) {{
+    muted=true; speaking=false;
+    synth.cancel();
+    setUI('stopped');
+  }} else {{
+    speak();
+  }}
+}}
+
+// Also expose globally so parent page buttons can call it
+window.lomaToggle = toggleTTS;
+try {{ window.top.lomaToggle = toggleTTS; }} catch(e) {{}}
+try {{ window.parent.lomaToggle = toggleTTS; }} catch(e) {{}}
+
+// Listen for postMessage from sibling iframes / parent
+window.addEventListener('message', function(e) {{
+  if (e.data === 'loma-toggle') toggleTTS();
+}});
 
 function init() {{
-  var voices = synth.getVoices();
-  if (voices.length > 0) {{ setTimeout(speak, 400); }}
+  var v=synth.getVoices();
+  if (v.length>0) {{ setTimeout(speak,500); }}
   else {{
-    synth.onvoiceschanged = function() {{ setTimeout(speak, 300); }};
-    setTimeout(function() {{ if (!speaking) speak(); }}, 1500);
+    synth.onvoiceschanged=function(){{ setTimeout(speak,350); }};
+    setTimeout(function(){{ if(!speaking) speak(); }},1800);
   }}
 }}
 init();
-</script>
-</body>
-</html>
-""", height=52, scrolling=False)
+</script></body></html>""", height=58, scrolling=False)
 
 
 
@@ -1728,23 +1903,52 @@ def do_analysis(sym, summaries, raw_dfs):
     if not summaries:
         return _fallback_analysis(sym, summaries, raw_dfs)
     ctx = market_ctx(sym, summaries, raw_dfs)
+    # Build a highly specific, personalized prompt
+    pref = ["4h","1h","1d","15m","30m","5m","1m"]
+    main_tf = next((t for t in pref if t in raw_dfs), list(raw_dfs.keys())[0])
+    t = _compute_technicals(raw_dfs[main_tf]) if raw_dfs else {}
+    coin = sym.replace("USDT","").replace("USD","")
     result = luma_call(
         [{"role":"user","content":
-          f"{ctx}\n\nDeliver your LOMA analysis: trend direction, key levels, "
-          f"multi-TF confluence, highest-conviction call, and key risk. Specific price levels."}],
+          f"{ctx}\n\nDeliver LOMA's full analysis of {coin} right now. "
+          f"Be direct and specific — name exact price levels. "
+          f"Current price ${t.get('price',0):,.4f}, RSI {t.get('rsi',50):.0f}, "
+          f"support ${t.get('support',0):,.4f}, resistance ${t.get('resistance',0):,.4f}. "
+          f"Tell Nancy what this coin is doing, where it's going, which trade to take and exactly why. "
+          f"Don't be generic. Give her the real read."}],
         sym=sym, summaries=summaries, raw_dfs=raw_dfs)
     return result
 
 def do_chat(sym, summaries, raw_dfs, question, history):
     ctx  = market_ctx(sym, summaries, raw_dfs)
-    msgs = [{"role":"user","content":f"Context:\n{ctx}"},
-            {"role":"assistant","content":"Got it. Ready."}]
+    pref = ["4h","1h","1d","15m","30m","5m","1m"]
+    main_tf = next((t for t in pref if t in raw_dfs), list(raw_dfs.keys())[0] if raw_dfs else None)
+    t = _compute_technicals(raw_dfs[main_tf]) if main_tf and raw_dfs else {}
+    coin = sym.replace("USDT","").replace("USD","") if sym else "this coin"
+
+    msgs = [{"role":"user","content":
+             f"Context:\n{ctx}\n\n"
+             f"Live data: {coin} at ${t.get('price',0):,.4f}, RSI {t.get('rsi',50):.0f}, "
+             f"support ${t.get('support',0):,.4f}, resistance ${t.get('resistance',0):,.4f}, "
+             f"EMA bias {'BULLISH' if t.get('ema9',0)>=t.get('ema21',0) else 'BEARISH'}."},
+            {"role":"assistant","content":"Got it. Ready for Nancy's question — I have all the live data."}]
     for h in history[-4:]:
         msgs += [{"role":"user","content":h["user"]},
                  {"role":"assistant","content":h["luma"]}]
-    msgs.append({"role":"user","content":question})
-    return luma_call(msgs, sym=sym, summaries=summaries, raw_dfs=raw_dfs,
-                     question=question, history=history)
+    msgs.append({"role":"user","content":
+                 f"Nancy asks: {question}\n\n"
+                 f"Answer with specific price levels from the live data above. "
+                 f"Be direct, personal, like you're talking to Nancy specifically. "
+                 f"No generic filler. Real levels, real bias, real answer."})
+
+    reply = luma_call(msgs, sym=sym, summaries=summaries, raw_dfs=raw_dfs,
+                      question=question, history=history)
+
+    # Log this chat exchange privately
+    has_data = bool(summaries and raw_dfs)
+    log_chat(sym or "unknown", question, reply, has_data)
+
+    return reply
 
 def analyze_image(filename, note=""):
     prompt = (f"A trader uploaded chart: '{filename}'. {('Note: '+note) if note else ''} "
@@ -2285,7 +2489,7 @@ div[data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover{
   <span style="color:#1e3a5f;font-size:.58rem;font-weight:700;letter-spacing:.08em;white-space:nowrap">PLATFORM</span>
 </div>""", unsafe_allow_html=True)
 
-    std_pages = [("home","🏠 Home"),("forecast","📊 Forecast"),("upload","📤 Upload")]
+    std_pages = [("home","🏠 Home"),("forecast","📊 Forecast"),("upload","📤 Upload"),("log","📋 Log")]
     for i,(pg,lbl) in enumerate(std_pages):
         with nav[i+1]:
             if st.button(lbl, key=f"nav_{pg}", use_container_width=True):
@@ -2477,21 +2681,34 @@ div.run-luma-wrap .stButton>button:active{
 
     st.markdown('<div class="ctrl-row">', unsafe_allow_html=True)
 
-    coin_names = [name for name,_ in TOP_COINS]
+    # Filter out divider entries from dropdown
+    coin_names = [name for name,sym in TOP_COINS if sym not in ("__divider__",)]
 
     # ── FIX: compact 4-column layout — coin + TF narrow, sliders compact ──
     c1, c2, c3, c4 = st.columns([1, 1.2, 0.9, 0.9])
 
     with c1:
-        coin_choice = st.selectbox("Coin", coin_names, index=0)
-        symbol_raw = dict(TOP_COINS).get(coin_choice, "__custom__")
-        if symbol_raw == "__custom__":
+        coin_choice = st.selectbox("Coin / Asset", coin_names, index=0)
+        symbol_raw = dict([(n,s) for n,s in TOP_COINS if s != "__divider__"]).get(coin_choice, "__custom__")
+
+        # Detect futures asset
+        is_futures = symbol_raw in FUTURES_SYMBOLS
+        asset_class = "futures" if is_futures else "crypto"
+
+        if is_futures:
+            yf_ticker, asset_label, asset_class = FUTURES_SYMBOLS[symbol_raw]
+            symbol = symbol_raw  # keep internal marker
+            st.markdown(f'<div style="color:#fbbf24;font-size:.7rem;margin-top:4px">📈 {asset_label} · via Yahoo Finance</div>',
+                        unsafe_allow_html=True)
+        elif symbol_raw == "__custom__":
             raw_input = st.text_input("Symbol", "BTCUSDT",
                                       placeholder="btc / ETHUSDT / ethereum…",
                                       label_visibility="collapsed")
             symbol = normalize_symbol(raw_input)
+            asset_class = "crypto"
         else:
             symbol = symbol_raw
+            asset_class = "crypto"
 
         if symbol != st.session_state.live_symbol:
             st.session_state.live_symbol = symbol
@@ -2499,12 +2716,24 @@ div.run-luma-wrap .stButton>button:active{
 
     with c2:
         selected_tfs = st.multiselect(
-            "Timeframes",
+            "Timeframes ⓘ",
             list(INTERVAL_MINUTES.keys()),
-            default=["15m","1h","4h"])
+            default=["15m","1h","4h"],
+            help="""📖 TIMEFRAME GUIDE — Choose based on your outlook:
+
+• 1m / 5m — Scalping only. Max 1–3 day lookback. Lots of noise. Do NOT use 200 days of 1m data.
+• 15m / 30m — Day trading. Up to 60–90 days lookback works well.
+• 1h — Swing trade entry timing. Great for 60–180 day lookback.
+• 4h — Core swing trading. Best signal-to-noise ratio. 180–365 days recommended.
+• 1d — Position trading & trend confirmation. 1–2 years of data ideal.
+• 1w / 2w / 1mo — Macro trend view. Need 2+ years. Don't use for short-term entries.
+
+⚠️ AVOID: Using 200 days of 1m/5m data — you get 200,000+ bars of noise and the model breaks down. Match your lookback to your timeframe.
+
+🎯 BEST COMBO: 15m + 1h + 4h for swing trading. 4h + 1d for position trades.""")
 
     with c3:
-        lookback_days = st.slider("Lookback (days)", 7, 365, 90, step=7)
+        lookback_days = st.slider("Lookback (days)", 7, 730, 90, step=7)
 
     with c4:
         # ── FIX: guard against min==max slider crash ──
@@ -2513,10 +2742,9 @@ div.run-luma-wrap .stButton>button:active{
             max_fc_days = max(1, int(128 * min_mins / 1440))
         else:
             max_fc_days = 7
-        max_fc_days = min(max_fc_days, 30)
+        max_fc_days = min(max_fc_days, 90)
 
         if max_fc_days <= 1:
-            # Can't render a slider with min==max — just show a label
             forecast_days = 1
             st.markdown(
                 '<div style="padding-top:28px;color:#64748b;font-size:.72rem">'
@@ -2526,8 +2754,18 @@ div.run-luma-wrap .stButton>button:active{
                 unsafe_allow_html=True)
         else:
             forecast_days = st.slider(
-                "Forecast (days)", 1, max_fc_days, min(7, max_fc_days),
-                help=f"Max {max_fc_days}d for selected TFs")
+                "Forecast Length ⓘ", 1, max_fc_days, min(7, max_fc_days),
+                help=f"""📖 FORECAST LENGTH GUIDE:
+
+• Low timeframes (1m/5m/15m) → short forecasts only (1–2 days max). The model sees ~128 bars ahead — on 1m that's only 2 hours. Do NOT set 14-day forecast on 1m charts.
+• 30m / 1h → up to 3–5 days meaningful
+• 4h → up to 7–14 days useful
+• 1d → up to 30 days
+• 1w+ → weeks/months ahead
+
+⚠️ Longer forecast ≠ more accurate. On short timeframes, anything beyond a few bars forward is extrapolation noise, not signal.
+
+Max today: {max_fc_days} days (based on your selected TFs)""")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2721,26 +2959,42 @@ div.run-luma-wrap .stButton>button:active{
 
         with prog_container.container():
             with st.spinner(f"Validating {symbol}…"):
-                sym_valid = validate_symbol(symbol)
+                if symbol in FUTURES_SYMBOLS:
+                    sym_valid = True  # futures via Yahoo Finance — no Binance check
+                else:
+                    sym_valid = validate_symbol(symbol)
 
         if not sym_valid:
             prog_container.error(f"**{symbol}** not found on Binance.US — try BTCUSDT, ETHUSDT, etc.")
             return
-
-        luma_model, model_err = load_model()
-        model_available = (luma_model is not None and model_err is None)
 
         fig = go.Figure()
         fcast_dfs, summaries, raw_dfs = {}, {}, {}
         prim  = selected_tfs[0]
         total = len(selected_tfs)
 
+        # Load both AI models
+        luma_model, model_err = load_model()
+        model_available = luma_model is not None
+        chronos_pipeline, chronos_err = load_chronos()
+        chronos_available = chronos_pipeline is not None
+
+        # Determine data source
+        is_futures = symbol in FUTURES_SYMBOLS
+        if is_futures:
+            yf_ticker, asset_label, asset_class = FUTURES_SYMBOLS[symbol]
+        else:
+            asset_class = "crypto"
+            asset_label = symbol
+
         for i, tf in enumerate(selected_tfs):
             pct_done = int((i/total)*100)
+            ai_label = "TimesFM + Chronos-2" if (model_available and chronos_available) else \
+                       "TimesFM" if model_available else "Chronos-2" if chronos_available else "Technical"
             prog_container.markdown(f"""
 <div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;padding:16px 20px;margin:8px 0">
   <div style="color:#a78bfa;font-size:.76rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">
-    🌙 Processing {tf} ({i+1}/{total})
+    🌙 Processing {tf} ({i+1}/{total}) · {ai_label}
   </div>
   <div style="background:#111827;border-radius:4px;height:8px;overflow:hidden">
     <div style="background:linear-gradient(90deg,#6d28d9,#38bdf8);height:100%;width:{pct_done}%;border-radius:4px;transition:width .4s ease"></div>
@@ -2750,7 +3004,10 @@ div.run-luma-wrap .stButton>button:active{
 
             eff = min(lookback_days, INTERVAL_MAX_DAYS[tf])
             try:
-                df = fetch_binance(symbol, tf, eff)
+                if is_futures:
+                    df = fetch_yahoo(yf_ticker, tf, str(eff)+"d")
+                else:
+                    df = fetch_binance(symbol, tf, eff)
             except Exception as e:
                 st.warning(f"⚠️ {tf}: {e}"); continue
             if len(df) < 30: continue
@@ -2776,67 +3033,124 @@ div.run-luma-wrap .stButton>button:active{
                     increasing_fillcolor="rgba(52,211,153,.22)",
                     decreasing_fillcolor="rgba(248,113,113,.22)"))
 
+            fc_timesfm   = np.array([])
+            fc_chronos   = np.array([])
+            fc_ensemble  = np.array([])
+            openrouter_raw = ""
+            chronos_raw    = ""
+
             if model_available:
                 try:
                     inp  = [prices[-512:].tolist()]
                     point_forecast, _ = luma_model.forecast(inp, freq=[0])
-                    fc = np.array(point_forecast[0])
-                    if len(fc) > horizon:
-                        fc = fc[:horizon]
-                    td = pd.Timedelta(minutes=mins)
-                    fi = pd.date_range(start=dates[-1]+td, periods=len(fc),
-                                       freq=td, tz=dates.tzinfo)
-                    fcast_dfs[tf] = pd.DataFrame({"Datetime":fi,"Forecast":fc.round(6)})
-                    summaries[tf] = {"last":float(prices[-1]),"end":float(fc[-1]),"bars":len(fc)}
-
-                    if tf == prim:
-                        # Confidence band (wide + narrow)
-                        fig.add_trace(go.Scatter(
-                            x=list(fi)+list(fi[::-1]),
-                            y=list(fc*1.014)+list((fc*0.986)[::-1]),
-                            fill="toself",
-                            fillcolor="rgba(109,40,217,.05)",
-                            line=dict(color="rgba(0,0,0,0)"),
-                            showlegend=False, hoverinfo="skip", name="outer_band"))
-                        fig.add_trace(go.Scatter(
-                            x=list(fi)+list(fi[::-1]),
-                            y=list(fc*1.006)+list((fc*0.994)[::-1]),
-                            fill="toself",
-                            fillcolor="rgba(167,139,250,.10)",
-                            line=dict(color="rgba(0,0,0,0)"),
-                            showlegend=False, hoverinfo="skip", name="inner_band"))
-                        # Main forecast line
-                        fig.add_trace(go.Scatter(
-                            x=fi, y=fc, mode="lines",
-                            name="LOMA Forecast",
-                            line=dict(color="rgba(167,139,250,.85)", width=2, dash="dot"),
-                            hovertemplate="<b>%{x|%b %d %H:%M}</b><br>Forecast: $%{y:,.4f}<extra></extra>"))
-                        # Hollow candle markers at each forecast point
-                        fig.add_trace(go.Scatter(
-                            x=fi[::max(1,len(fi)//20)],
-                            y=fc[::max(1,len(fc)//20)],
-                            mode="markers",
-                            name="FC Nodes",
-                            marker=dict(
-                                symbol="circle-open",
-                                size=7,
-                                color="rgba(167,139,250,.9)",
-                                line=dict(width=1.5, color="rgba(167,139,250,.9)")
-                            ),
-                            hovertemplate="<b>%{x|%b %d %H:%M}</b><br>$%{y:,.4f}<extra></extra>",
-                            showlegend=False))
-                        # Forecast start marker
-                        fig.add_trace(go.Scatter(
-                            x=[fi[0]], y=[fc[0]],
-                            mode="markers",
-                            marker=dict(symbol="diamond", size=10, color="#a78bfa",
-                                       line=dict(width=2, color="#ffffff")),
-                            showlegend=False, hoverinfo="skip"))
-                        # Auto-zoom: show last 60 candles + all forecast
-                        zoom_start = dates[-min(60, len(dates))]
-                        zoom_end   = fi[-1]
+                    fc_timesfm = np.array(point_forecast[0])
+                    if len(fc_timesfm) > horizon:
+                        fc_timesfm = fc_timesfm[:horizon]
+                    openrouter_raw = f"timesfm_last={fc_timesfm[-1]:.4f}" if len(fc_timesfm) else ""
                 except Exception as e:
-                    st.warning(f"⚠️ Forecast failed on {tf}: {e}")
+                    pass
+
+            if chronos_available:
+                try:
+                    fc_chronos = chronos_forecast(chronos_pipeline, prices.tolist(), horizon)
+                    if len(fc_chronos) > horizon:
+                        fc_chronos = fc_chronos[:horizon]
+                    chronos_raw = f"chronos_last={fc_chronos[-1]:.4f}" if len(fc_chronos) else ""
+                except Exception as e:
+                    pass
+
+            # Ensemble: blend TimesFM + Chronos (60/40 weighting, or whichever is available)
+            if len(fc_timesfm) > 0 and len(fc_chronos) > 0:
+                min_len = min(len(fc_timesfm), len(fc_chronos))
+                fc_ensemble = 0.6 * fc_timesfm[:min_len] + 0.4 * fc_chronos[:min_len]
+                ai_model_label = "TimesFM+Chronos-2 Ensemble"
+            elif len(fc_timesfm) > 0:
+                fc_ensemble = fc_timesfm
+                ai_model_label = "TimesFM"
+            elif len(fc_chronos) > 0:
+                fc_ensemble = fc_chronos
+                ai_model_label = "Chronos-2"
+            else:
+                ai_model_label = "Technical"
+
+            fc = fc_ensemble
+
+            if len(fc) > 0:
+                td = pd.Timedelta(minutes=mins)
+                fi = pd.date_range(start=dates[-1]+td, periods=len(fc),
+                                   freq=td, tz=dates.tzinfo)
+                fcast_dfs[tf] = pd.DataFrame({"Datetime":fi,"Forecast":fc.round(6)})
+                summaries[tf] = {"last":float(prices[-1]),"end":float(fc[-1]),"bars":len(fc)}
+
+                # ── LOG EVERY FORECAST ───────────────────────────────────────
+                t_dict = _compute_technicals(df)
+                bias   = "LONG" if t_dict.get("ema9",0) >= t_dict.get("ema21",0) else "SHORT"
+                conf   = "HIGH" if len(summaries) == total else "MEDIUM"
+                display_sym = yf_ticker if is_futures else symbol
+                log_forecast(
+                    display_sym, tf, asset_class,
+                    float(prices[-1]), float(fc[-1]),
+                    ai_model_label, len(fc), t_dict,
+                    bias, conf, openrouter_raw, chronos_raw
+                )
+
+                if tf == prim:
+                    # Confidence band (wide + narrow)
+                    fig.add_trace(go.Scatter(
+                        x=list(fi)+list(fi[::-1]),
+                        y=list(fc*1.014)+list((fc*0.986)[::-1]),
+                        fill="toself",
+                        fillcolor="rgba(109,40,217,.05)",
+                        line=dict(color="rgba(0,0,0,0)"),
+                        showlegend=False, hoverinfo="skip", name="outer_band"))
+                    fig.add_trace(go.Scatter(
+                        x=list(fi)+list(fi[::-1]),
+                        y=list(fc*1.006)+list((fc*0.994)[::-1]),
+                        fill="toself",
+                        fillcolor="rgba(167,139,250,.10)",
+                        line=dict(color="rgba(0,0,0,0)"),
+                        showlegend=False, hoverinfo="skip", name="inner_band"))
+                    # Main LOMA (ensemble) forecast line
+                    fig.add_trace(go.Scatter(
+                        x=fi, y=fc, mode="lines",
+                        name="LOMA Ensemble Forecast",
+                        line=dict(color="rgba(167,139,250,.85)", width=2, dash="dot"),
+                        hovertemplate="<b>%{x|%b %d %H:%M}</b><br>Forecast: $%{y:,.4f}<extra></extra>"))
+                    # If both models available, show individual lines too
+                    if len(fc_timesfm) > 0 and len(fc_chronos) > 0:
+                        min_len2 = min(len(fc_timesfm), len(fi))
+                        fig.add_trace(go.Scatter(
+                            x=fi[:min_len2], y=fc_timesfm[:min_len2], mode="lines",
+                            name="TimesFM",
+                            line=dict(color="rgba(56,189,248,.45)", width=1, dash="dot"),
+                            hovertemplate="TimesFM: $%{y:,.4f}<extra></extra>"))
+                        min_len3 = min(len(fc_chronos), len(fi))
+                        fig.add_trace(go.Scatter(
+                            x=fi[:min_len3], y=fc_chronos[:min_len3], mode="lines",
+                            name="Chronos-2",
+                            line=dict(color="rgba(251,191,36,.45)", width=1, dash="dot"),
+                            hovertemplate="Chronos-2: $%{y:,.4f}<extra></extra>"))
+                    # Hollow candle markers
+                    fig.add_trace(go.Scatter(
+                        x=fi[::max(1,len(fi)//20)],
+                        y=fc[::max(1,len(fc)//20)],
+                        mode="markers",
+                        name="FC Nodes",
+                        marker=dict(
+                            symbol="circle-open", size=7,
+                            color="rgba(167,139,250,.9)",
+                            line=dict(width=1.5, color="rgba(167,139,250,.9)")
+                        ),
+                        hovertemplate="<b>%{x|%b %d %H:%M}</b><br>$%{y:,.4f}<extra></extra>",
+                        showlegend=False))
+                    fig.add_trace(go.Scatter(
+                        x=[fi[0]], y=[fc[0]],
+                        mode="markers",
+                        marker=dict(symbol="diamond", size=10, color="#a78bfa",
+                                   line=dict(width=2, color="#ffffff")),
+                        showlegend=False, hoverinfo="skip"))
+                    zoom_start = dates[-min(60, len(dates))]
+                    zoom_end   = fi[-1]
             else:
                 summaries[tf] = {"last":float(prices[-1]),"end":float(prices[-1]),"bars":0}
 
@@ -2853,8 +3167,12 @@ div.run-luma-wrap .stButton>button:active{
         st.session_state.forecast_ran = True
         st.session_state.chat_history = []
 
-        if not model_available:
-            st.warning(f"⚠️ Forecast model unavailable — showing live charts + AI analysis only.")
+        if not model_available and not chronos_available:
+            st.warning("⚠️ AI forecast models unavailable — showing live charts + technical analysis only.")
+        elif model_available and chronos_available:
+            st.success("✅ TimesFM + Chronos-2 Ensemble active — dual-AI forecast mode.")
+        elif chronos_available:
+            st.info("ℹ️ Chronos-2 active (TimesFM unavailable) — single-model mode.")
 
         fig.update_layout(
             paper_bgcolor="#070a12", plot_bgcolor="#070a12",
@@ -2894,19 +3212,84 @@ div.run-luma-wrap .stButton>button:active{
 
         if raw_dfs:
             st.markdown('<div class="sh">⬇️ Download Data</div>', unsafe_allow_html=True)
-            dl_cols = st.columns(len(raw_dfs)+1)
-            for idx,(tf3,df_r) in enumerate(raw_dfs.items()):
-                with dl_cols[idx]:
-                    st.download_button(f"OHLC {tf3}",
-                        data=df_r.reset_index().to_csv(index=False),
-                        file_name=f"luma_{symbol}_{tf3}_ohlc.csv",
-                        mime="text/csv",use_container_width=True)
+            # Build all data as base64 for JS download (no page refresh)
+            dl_items = []
+            for tf3, df_r in raw_dfs.items():
+                csv_b64 = base64.b64encode(
+                    df_r.reset_index().to_csv(index=False).encode()
+                ).decode()
+                dl_items.append({
+                    "label": f"OHLC {tf3}",
+                    "filename": f"luma_{symbol}_{tf3}_ohlc.csv",
+                    "b64": csv_b64
+                })
             if fcast_dfs:
-                with dl_cols[-1]:
-                    st.download_button("Forecasts CSV",
-                        data=pd.concat([d.assign(TF=t) for t,d in fcast_dfs.items()]).to_csv(index=False),
-                        file_name=f"luma_{symbol}_forecasts.csv",
-                        mime="text/csv",use_container_width=True)
+                fc_csv = pd.concat([d.assign(TF=t) for t, d in fcast_dfs.items()]).to_csv(index=False)
+                fc_b64 = base64.b64encode(fc_csv.encode()).decode()
+                dl_items.append({
+                    "label": "📈 Forecasts",
+                    "filename": f"luma_{symbol}_forecasts.csv",
+                    "b64": fc_b64
+                })
+
+            # Build download buttons as pure HTML/JS — zero page refresh
+            btn_html = ""
+            for item in dl_items:
+                btn_html += f"""
+<button onclick="(function(){{
+  var a=document.createElement('a');
+  a.href='data:text/csv;base64,{item['b64']}';
+  a.download='{item['filename']}';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}})()">⬇ {item['label']}</button>"""
+
+            # Hidden log download — only accessible by knowing where to look
+            log_df_now = get_log_df()
+            chat_df_now = get_chat_log_df()
+            hidden_btns = ""
+            if not log_df_now.empty:
+                log_b64 = base64.b64encode(log_df_now.to_csv(index=False).encode()).decode()
+                hidden_btns += f"""
+<button class="hidden-log-btn" onclick="(function(){{
+  var a=document.createElement('a');
+  a.href='data:text/csv;base64,{log_b64}';
+  a.download='luma_private_forecast_log.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}})()">🔒 My Forecast Log</button>"""
+            if not chat_df_now.empty:
+                chat_b64 = base64.b64encode(chat_df_now.to_csv(index=False).encode()).decode()
+                hidden_btns += f"""
+<button class="hidden-log-btn" onclick="(function(){{
+  var a=document.createElement('a');
+  a.href='data:text/csv;base64,{chat_b64}';
+  a.download='luma_private_chat_log.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}})()">🔒 My Chat Log</button>"""
+
+            st.markdown(f"""
+<style>
+.dl-bar{{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;align-items:center}}
+.dl-bar button{{
+  background:#0d1225;border:1px solid #1e293b;color:#94a3b8;
+  font-size:.72rem;font-weight:700;letter-spacing:.06em;padding:7px 16px;
+  border-radius:5px;cursor:pointer;font-family:'IBM Plex Mono',monospace;
+  transition:all .18s;text-transform:uppercase
+}}
+.dl-bar button:hover{{background:#1e293b;color:#f1f5f9;border-color:#334155}}
+.hidden-log-btn{{
+  background:rgba(109,40,217,.08)!important;
+  border:1px solid rgba(109,40,217,.2)!important;
+  color:rgba(167,139,250,.5)!important;
+  font-size:.62rem!important;
+  opacity:.35;
+}}
+.hidden-log-btn:hover{{opacity:1!important;background:rgba(109,40,217,.2)!important}}
+</style>
+<div class="dl-bar">
+{btn_html}
+<span style="flex:1"></span>
+{hidden_btns}
+</div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="sh">🌙 LOMA Analysis</div>', unsafe_allow_html=True)
         with st.spinner("LOMA is reading the charts…"):
@@ -3171,6 +3554,87 @@ def sub_about():
 """, unsafe_allow_html=True)
 
 
+def sub_log():
+    """Forecast log viewer + backtest analysis — private to Nancy."""
+    st.markdown('<div style="padding:14px">', unsafe_allow_html=True)
+    st.markdown('<div class="sh">📋 Private Log — Forecast & Chat Database</div>', unsafe_allow_html=True)
+
+    log_df   = get_log_df()
+    chat_df  = get_chat_log_df()
+    log_path = str(LOG_FILE)
+
+    st.markdown(f"""
+<div style="background:#0a0d1c;border:1px solid #1e293b;border-radius:8px;padding:14px 18px;margin-bottom:14px">
+  <div style="color:#38bdf8;font-size:.7rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">
+    📁 Log Location (Your Computer)
+  </div>
+  <div style="color:#a78bfa;font-family:'IBM Plex Mono',monospace;font-size:.82rem;word-break:break-all">
+    {log_path}
+  </div>
+  <div style="color:#374151;font-size:.7rem;margin-top:6px">
+    Every forecast and chat is auto-logged here. Import to Excel/Python to backtest against actual outcomes.
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📈 Forecast Log", "💬 Chat Log"])
+
+    with tab1:
+        if log_df.empty:
+            st.info("No forecasts logged yet. Run a forecast first.")
+        else:
+            total_logs = len(log_df)
+            unique_assets = log_df["symbol"].nunique() if "symbol" in log_df.columns else 0
+            st.markdown(f"""
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+  <div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;padding:12px 18px">
+    <div style="color:#374151;font-size:.62rem;text-transform:uppercase;letter-spacing:.07em">Forecasts Logged</div>
+    <div style="color:#f1f5f9;font-size:1.3rem;font-family:'IBM Plex Mono',monospace;font-weight:700">{total_logs}</div>
+  </div>
+  <div style="background:#0d1225;border:1px solid #1e293b;border-radius:8px;padding:12px 18px">
+    <div style="color:#374151;font-size:.62rem;text-transform:uppercase;letter-spacing:.07em">Unique Assets</div>
+    <div style="color:#f1f5f9;font-size:1.3rem;font-family:'IBM Plex Mono',monospace;font-weight:700">{unique_assets}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+            # JS no-refresh download
+            log_b64 = base64.b64encode(log_df.to_csv(index=False).encode()).decode()
+            st.markdown(f"""
+<button onclick="(function(){{var a=document.createElement('a');a.href='data:text/csv;base64,{log_b64}';
+a.download='luma_private_forecast_log.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);
+}})()">⬇ Download Forecast Log</button>
+<style>button{{background:#0d1225;border:1px solid #1e293b;color:#94a3b8;font-size:.72rem;
+font-weight:700;letter-spacing:.06em;padding:7px 16px;border-radius:5px;cursor:pointer;
+font-family:'IBM Plex Mono',monospace;transition:all .18s;margin-bottom:14px}}
+button:hover{{background:#1e293b;color:#f1f5f9}}</style>""", unsafe_allow_html=True)
+
+            display_df = log_df.tail(100).sort_values(
+                "logged_at_utc", ascending=False
+            ) if "logged_at_utc" in log_df.columns else log_df.tail(100)
+            st.dataframe(display_df, use_container_width=True, height=400)
+
+    with tab2:
+        if chat_df.empty:
+            st.info("No chats logged yet. Ask LOMA something in the Forecast tab.")
+        else:
+            st.markdown(f"**{len(chat_df)} conversations logged**", unsafe_allow_html=False)
+            chat_b64 = base64.b64encode(chat_df.to_csv(index=False).encode()).decode()
+            st.markdown(f"""
+<button onclick="(function(){{var a=document.createElement('a');a.href='data:text/csv;base64,{chat_b64}';
+a.download='luma_private_chat_log.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);
+}})()">⬇ Download Chat Log</button>
+<style>button{{background:#0d1225;border:1px solid #1e293b;color:#94a3b8;font-size:.72rem;
+font-weight:700;letter-spacing:.06em;padding:7px 16px;border-radius:5px;cursor:pointer;
+font-family:'IBM Plex Mono',monospace;transition:all .18s;margin-bottom:14px}}
+button:hover{{background:#1e293b;color:#f1f5f9}}</style>""", unsafe_allow_html=True)
+
+            display_chat = chat_df.tail(50).sort_values(
+                "logged_at_utc", ascending=False
+            ) if "logged_at_utc" in chat_df.columns else chat_df.tail(50)
+            st.dataframe(display_chat, use_container_width=True, height=400)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  DASHBOARD ROUTER
 # ══════════════════════════════════════════════════════════════════════
@@ -3183,6 +3647,7 @@ def page_dashboard():
     elif sub == "upload":   sub_upload()
     elif sub == "chat":     sub_chat()
     elif sub == "about":    sub_about()
+    elif sub == "log":      sub_log()
     else:                   sub_home()
 
 
