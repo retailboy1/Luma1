@@ -4186,10 +4186,10 @@ function toggleMic(){
         # Proceed button
         st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
         st.markdown('<div class="proceed-btn">', unsafe_allow_html=True)
-        proceed_clicked = st.button("🔬  PROCEED TO BACKTEST", use_container_width=True, key="bt_proceed_setup")
+        go = st.button("🔬  PROCEED TO BACKTEST", use_container_width=True, key="bt_proceed_setup")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        if proceed_clicked:
+        if go:
             strat = st.session_state.get("bt_strategy_input", "")
             if not strat.strip():
                 st.warning("Please describe your strategy above before proceeding.")
@@ -4767,7 +4767,9 @@ button:hover{{background:#1e293b;color:#f1f5f9}}</style>""", unsafe_allow_html=T
             suggestions.append(f"<strong>Overall Performance</strong> — Your strategy tested well on {coin}. Consider running it on 2-3 correlated assets (e.g. ETH, SOL) to see if the edge is market-specific or generalizable.")
         suggestions.append("<strong>Next Test Suggestion</strong> — Try the same strategy on a different market cycle period (e.g. 2020–2021 bull vs 2022 bear) to understand how it performs across regimes.")
 
-        suggestions_html = "".join(f"<div style='margin-bottom:10px'>▸ {s}</div>" for s in suggestions)
+        suggestions_html = "".join(
+            f'<div class="improve-item">{s}</div>' for s in suggestions
+        )
 
         st.markdown(f"""
 <div style="padding:0 22px;margin-top:4px">
