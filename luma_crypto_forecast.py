@@ -4290,7 +4290,7 @@ function toggleMic(){
 
         progress_box = st.empty()
         steps_list = (
-            [f"Initializing {coin} price history from {start_yr}…", 0]
+            [[f"Initializing {coin} price history from {start_yr}…", 0]]
           + [[f"Testing {tag} on {start_yr + i*(end_yr-start_yr)//max(len(tags),1):.0f} data…",
               int((i+1)/(len(tags)+4)*100)] for i, tag in enumerate(tags)]
           + [[f"Simulating {coin} trades with leverage {params.get('leverage',1)}x…", 70],
