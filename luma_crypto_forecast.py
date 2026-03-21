@@ -4186,10 +4186,10 @@ function toggleMic(){
         # Proceed button
         st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
         st.markdown('<div class="proceed-btn">', unsafe_allow_html=True)
-        go = st.button("🔬  PROCEED TO BACKTEST", use_container_width=True, key="bt_proceed_setup")
+        proceed_clicked = st.button("🔬  PROCEED TO BACKTEST", use_container_width=True, key="bt_proceed_setup")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        if go:
+        if proceed_clicked:
             strat = st.session_state.get("bt_strategy_input", "")
             if not strat.strip():
                 st.warning("Please describe your strategy above before proceeding.")
